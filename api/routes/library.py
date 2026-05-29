@@ -70,7 +70,14 @@ async def upload(file: UploadFile, assistant: RagAssistant = Depends(get_rag_ass
 
 @router.get("/library/documents")
 def list_documents(assistant: RagAssistant = Depends(get_rag_assistant)):
-    return assistant.list_documents()
+    return [
+        {
+            "name": path.name,
+            "path": str(path),
+            "size": path.stat().st_size,
+        }
+        for path in assistant.list_documents()
+    ]
 
 
 @router.delete("/library/documents/{path:path}")
