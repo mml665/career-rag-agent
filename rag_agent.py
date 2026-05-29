@@ -20,6 +20,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from bm25_index import BM25Index
+
 
 load_dotenv()
 
@@ -49,12 +51,21 @@ class RagConfig:
     resume_upload_dir: Path = Path("data/resume_uploads")
     job_upload_dir: Path = Path("data/job_uploads")
     chroma_dir: Path = Path("data/chroma")
+    bm25_dir: Path = Path("data/bm25")
     history_path: Path = Path("data/history.jsonl")
     collection_name: str = "study_rag"
     chunk_size: int = int(os.getenv("RAG_CHUNK_SIZE", "700"))
     chunk_overlap: int = int(os.getenv("RAG_CHUNK_OVERLAP", "120"))
     top_k: int = int(os.getenv("RAG_TOP_K", "4"))
     min_relevance_score: float = float(os.getenv("RAG_MIN_RELEVANCE_SCORE", "0.45"))
+    # Hybrid retrieval parameters
+    enable_bm25: bool = os.getenv("RAG_ENABLE_BM25", "true").lower() == "true"
+    bm25_weight: float = float(os.getenv("RAG_BM25_WEIGHT", "0.3"))
+    vector_weight: float = float(os.getenv("RAG_VECTOR_WEIGHT", "0.7"))
+    rrf_k: int = int(os.getenv("RAG_RRF_K", "60"))
+    # Rerank parameters
+    enable_rerank: bool = os.getenv("RAG_ENABLE_RERANK", "true").lower() == "true"
+    rerank_top_n: int = int(os.getenv("RAG_RERANK_TOP_N", "10"))
 
 
 @dataclass
@@ -320,8 +331,23 @@ class RagAssistant:
             chunk.metadata["chunk_index"] = index
             chunk.metadata["source_name"] = Path(chunk.metadata.get("source", "")).name
 
+        # Add to vector store
         vectorstore = self._vectorstore()
         vectorstore.add_documents(chunks)
+
+        # Build BM25 index if enabled
+        if self.config.enable_bm25:
+            bm25_index = self._load_bm25_index()
+            # Get all documents from vector store for BM25 index
+            all_docs = vectorstore.get()["documents"]
+            all_metas = vectorstore.get()["metadatas"]
+            all_chunks = [
+                Document(page_content=doc, metadata=meta)
+                for doc, meta in zip(all_docs, all_metas)
+            ]
+            bm25_index.build(all_chunks)
+            self._save_bm25_index(bm25_index)
+
         return len(chunks)
 
     def reset_index(self) -> None:
@@ -331,6 +357,11 @@ class RagAssistant:
             vectorstore.delete_collection()
         finally:
             self._close_vectorstore(vectorstore)
+
+        # Clean BM25 index
+        import shutil
+        if self.config.bm25_dir.exists():
+            shutil.rmtree(self.config.bm25_dir, ignore_errors=True)
 
     def search(self, question: str, top_k: int | None = None) -> list[dict]:
         scored_docs = self._retrieve(question, top_k, apply_threshold=False)
@@ -722,17 +753,148 @@ class RagAssistant:
         top_k: int | None = None,
         apply_threshold: bool = True,
     ) -> list[tuple[Document, float]]:
+        k = top_k or self.config.top_k
         vectorstore = self._vectorstore()
 
-        scored_docs = vectorstore.similarity_search_with_relevance_scores(
+        # Vector retrieval
+        vector_results = vectorstore.similarity_search_with_relevance_scores(
             question,
-            k=top_k or self.config.top_k,
+            k=k * 2,
         )
 
-        if not apply_threshold:
-            return scored_docs
+        def vector_only() -> list[tuple[Document, float]]:
+            # Pure vector retrieval
+            if not apply_threshold:
+                return vector_results[:k]
+            return [
+                (doc, score)
+                for doc, score in vector_results[:k]
+                if score >= self.config.min_relevance_score
+            ]
 
-        return [(doc, score) for doc, score in scored_docs if score >= self.config.min_relevance_score]
+        if not self.config.enable_bm25:
+            return vector_only()
+
+        # BM25 retrieval
+        bm25_index = self._load_bm25_index()
+        bm25_results = bm25_index.search(question, top_k=k * 2)
+        if not bm25_results:
+            return vector_only()
+
+        # RRF fusion
+        rrf_scores: dict[str, float] = {}
+        doc_map: dict[str, Document] = {}
+        vector_score_map: dict[str, float] = {}  # 原始向量分数，用于阈值过滤
+
+        # Add vector results
+        for rank, (doc, score) in enumerate(vector_results):
+            rrf_key = doc.page_content
+            rrf_scores[rrf_key] = rrf_scores.get(rrf_key, 0) + (
+                self.config.vector_weight / (self.config.rrf_k + rank + 1)
+            )
+            doc_map[rrf_key] = doc
+            vector_score_map[rrf_key] = score
+
+        # Add BM25 results
+        for rank, (doc, score) in enumerate(bm25_results):
+            rrf_key = doc.page_content
+            rrf_scores[rrf_key] = rrf_scores.get(rrf_key, 0) + (
+                self.config.bm25_weight / (self.config.rrf_k + rank + 1)
+            )
+            if rrf_key not in doc_map:
+                doc_map[rrf_key] = doc
+            # BM25-only 文档无向量分数，设为 0
+            if rrf_key not in vector_score_map:
+                vector_score_map[rrf_key] = 0.0
+
+        # Sort by RRF score (RRF 只负责排序)
+        sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        scored_docs = [(doc_map[key], rrf_scores[key]) for key in sorted_keys[:k]]
+
+        # Apply threshold — 用原始向量分数过滤，不用 RRF 归一化分数
+        if apply_threshold:
+            scored_docs = [
+                (doc, vector_score_map.get(doc.page_content, 0.0))
+                for doc, _score in scored_docs
+                if vector_score_map.get(doc.page_content, 0.0) >= self.config.min_relevance_score
+            ]
+
+        # Apply rerank if enabled
+        if self.config.enable_rerank and scored_docs:
+            scored_docs = self._rerank(question, scored_docs, k)
+
+        return scored_docs
+
+    def _rerank(
+        self,
+        query: str,
+        candidates: list[tuple[Document, float]],
+        top_k: int,
+    ) -> list[tuple[Document, float]]:
+        """使用 DashScope Rerank API 对候选结果重排序。"""
+        if not self._require_api_key_for_rerank():
+            return candidates[:top_k]
+
+        docs = [doc for doc, _ in candidates]
+        contents = [doc.page_content for doc in docs]
+
+        try:
+            reranked = self._dashscope_rerank(query, contents)
+            # Reranked returns (index, score) pairs
+            results = []
+            for idx, score in reranked[:top_k]:
+                if idx < len(docs):
+                    results.append((docs[idx], score))
+            return results
+        except Exception:
+            # Fallback to original order if rerank fails
+            return candidates[:top_k]
+
+    def _require_api_key_for_rerank(self) -> bool:
+        """检查是否有 API key 用于 rerank。"""
+        return bool(dashscope_api_key())
+
+    def _dashscope_rerank(
+        self, query: str, documents: list[str], top_n: int = 10
+    ) -> list[tuple[int, float]]:
+        """调用 DashScope Rerank API。"""
+        api_key = dashscope_api_key()
+        if not api_key:
+            return [(i, 0.0) for i in range(len(documents))]
+
+        url = "https://dashscope.aliyuncs.com/api/v1/services/reranker/text-reranking/text-reranking"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "gte-rerank",
+            "input": {
+                "query": query,
+                "documents": documents,
+            },
+            "parameters": {
+                "top_n": top_n,
+                "return_documents": False,
+            },
+        }
+
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        results = response.json().get("output", {}).get("results", [])
+        return [(r["index"], r["relevance_score"]) for r in results]
+
+    def _load_bm25_index(self) -> BM25Index:
+        """加载 BM25 索引。"""
+        bm25_dir = self.config.bm25_dir
+        if bm25_dir.exists() and (bm25_dir / "bm25.pkl").exists():
+            return BM25Index.load(bm25_dir)
+        return BM25Index()
+
+    def _save_bm25_index(self, index: BM25Index) -> None:
+        """保存 BM25 索引。"""
+        index.save(self.config.bm25_dir)
 
     def _llm(self) -> ChatOpenAI:
         return ChatOpenAI(

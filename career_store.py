@@ -115,17 +115,30 @@ class ResumeVersion:
 
 
 class CareerStore:
-    def __init__(self, data_dir: Path = Path("data/career")):
+    def __init__(
+        self,
+        data_dir: Path = Path("data/career"),
+        db_path: Path | None = None,
+    ):
         self.data_dir = data_dir
-        self.candidate_profile_path = data_dir / "candidate_profile.json"
-        self.profile_path = data_dir / "profile_evidence.json"
-        self.jobs_path = data_dir / "job_postings.json"
-        self.analyses_path = data_dir / "match_analyses.json"
-        self.applications_path = data_dir / "application_records.json"
-        self.resume_versions_path = data_dir / "resume_versions.json"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._db = None
+
+        if db_path is not None:
+            from db import Database
+            self._db = Database(db_path)
+        else:
+            self.candidate_profile_path = data_dir / "candidate_profile.json"
+            self.profile_path = data_dir / "profile_evidence.json"
+            self.jobs_path = data_dir / "job_postings.json"
+            self.analyses_path = data_dir / "match_analyses.json"
+            self.applications_path = data_dir / "application_records.json"
+            self.resume_versions_path = data_dir / "resume_versions.json"
+            self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def load_candidate_profile(self) -> CandidateProfile:
+        if self._db:
+            payload = self._db.get_profile()
+            return CandidateProfile(**payload) if payload else CandidateProfile()
         if not self.candidate_profile_path.exists():
             return CandidateProfile()
         payload = json.loads(self.candidate_profile_path.read_text(encoding="utf-8"))
@@ -154,9 +167,12 @@ class CareerStore:
             summary=summary.strip(),
             updated_at=self._timestamp(),
         )
-        self.candidate_profile_path.write_text(
-            json.dumps(asdict(profile), ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        if self._db:
+            self._db.save_profile(asdict(profile))
+        else:
+            self.candidate_profile_path.write_text(
+                json.dumps(asdict(profile), ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         return profile
 
     def add_profile_evidence(
@@ -184,13 +200,19 @@ class CareerStore:
             verified=verified,
             created_at=self._timestamp(),
         )
-        items = self.list_profile_evidence()
-        items.append(evidence)
-        self._write_records(self.profile_path, [asdict(item) for item in items])
-        self._invalidate_match_analyses()
+        if self._db:
+            self._db.add_evidence(asdict(evidence))
+            self._db.invalidate_all_analyses()
+        else:
+            items = self.list_profile_evidence()
+            items.append(evidence)
+            self._write_records(self.profile_path, [asdict(item) for item in items])
+            self._invalidate_match_analyses()
         return evidence
 
     def list_profile_evidence(self) -> list[ProfileEvidence]:
+        if self._db:
+            return [ProfileEvidence(**item) for item in self._db.list_evidence()]
         return [ProfileEvidence(**item) for item in self._read_records(self.profile_path)]
 
     def save_profile_sections(
@@ -226,11 +248,26 @@ class CareerStore:
                     created_at=existing.created_at if existing else timestamp,
                 )
             )
-        old_payload = [asdict(item) for item in existing_records]
-        new_payload = [asdict(item) for item in records]
-        self._write_records(self.profile_path, new_payload)
-        if old_payload != new_payload:
-            self._invalidate_match_analyses()
+
+        if self._db:
+            old_payload = [asdict(item) for item in existing_records]
+            new_payload = [asdict(item) for item in records]
+            for record in records:
+                existing = next(
+                    (e for e in existing_records if e.evidence_id == record.evidence_id), None
+                )
+                if existing:
+                    self._db.update_evidence(record.evidence_id, asdict(record))
+                else:
+                    self._db.add_evidence(asdict(record))
+            if old_payload != new_payload:
+                self._db.invalidate_all_analyses()
+        else:
+            old_payload = [asdict(item) for item in existing_records]
+            new_payload = [asdict(item) for item in records]
+            self._write_records(self.profile_path, new_payload)
+            if old_payload != new_payload:
+                self._invalidate_match_analyses()
         return records
 
     def update_profile_evidence(
@@ -261,9 +298,13 @@ class CareerStore:
             verified=verified,
             created_at=existing.created_at,
         )
-        records = [updated if item.evidence_id == evidence_id else item for item in items]
-        self._write_records(self.profile_path, [asdict(item) for item in records])
-        self._invalidate_match_analyses()
+        if self._db:
+            self._db.update_evidence(evidence_id, asdict(updated))
+            self._db.invalidate_all_analyses()
+        else:
+            records = [updated if item.evidence_id == evidence_id else item for item in items]
+            self._write_records(self.profile_path, [asdict(item) for item in records])
+            self._invalidate_match_analyses()
         return updated
 
     def delete_profile_evidence(self, evidence_id: str) -> bool:
@@ -271,8 +312,12 @@ class CareerStore:
         kept = [item for item in items if item.evidence_id != evidence_id]
         if len(kept) == len(items):
             return False
-        self._write_records(self.profile_path, [asdict(item) for item in kept])
-        self._invalidate_match_analyses()
+        if self._db:
+            self._db.delete_evidence(evidence_id)
+            self._db.invalidate_all_analyses()
+        else:
+            self._write_records(self.profile_path, [asdict(item) for item in kept])
+            self._invalidate_match_analyses()
         return True
 
     def delete_profile_section(self, category: str) -> bool:
@@ -282,8 +327,14 @@ class CareerStore:
         kept = [item for item in items if item.category != category]
         if len(kept) == len(items):
             return False
-        self._write_records(self.profile_path, [asdict(item) for item in kept])
-        self._invalidate_match_analyses()
+        if self._db:
+            for item in items:
+                if item.category == category:
+                    self._db.delete_evidence(item.evidence_id)
+            self._db.invalidate_all_analyses()
+        else:
+            self._write_records(self.profile_path, [asdict(item) for item in kept])
+            self._invalidate_match_analyses()
         return True
 
     def add_job_posting(
@@ -313,15 +364,22 @@ class CareerStore:
             internship_requirements=self._unique_items(internship_requirements or []),
             created_at=self._timestamp(),
         )
-        items = self.list_job_postings()
-        items.append(job)
-        self._write_records(self.jobs_path, [asdict(item) for item in items])
+        if self._db:
+            self._db.add_job(asdict(job))
+        else:
+            items = self.list_job_postings()
+            items.append(job)
+            self._write_records(self.jobs_path, [asdict(item) for item in items])
         return job
 
     def list_job_postings(self) -> list[JobPosting]:
+        if self._db:
+            return [JobPosting(**item) for item in self._db.list_jobs()]
         return [JobPosting(**item) for item in self._read_records(self.jobs_path)]
 
     def delete_job_posting(self, job_id: str) -> bool:
+        if self._db:
+            return self._db.delete_job(job_id)
         items = self.list_job_postings()
         kept = [item for item in items if item.job_id != job_id]
         if len(kept) == len(items):
@@ -384,18 +442,25 @@ class CareerStore:
                 job.preferred_skills,
             ),
         )
-        items = self.list_match_analyses()
-        items.append(analysis)
-        self._write_records(self.analyses_path, [asdict(item) for item in items])
+        if self._db:
+            self._db.add_analysis(asdict(analysis))
+        else:
+            items = self.list_match_analyses()
+            items.append(analysis)
+            self._write_records(self.analyses_path, [asdict(item) for item in items])
         return analysis
 
     def list_match_analyses(self, job_id: str | None = None) -> list[MatchAnalysis]:
+        if self._db:
+            return [MatchAnalysis(**item) for item in self._db.list_analyses(job_id)]
         items = [MatchAnalysis(**item) for item in self._read_records(self.analyses_path)]
         if job_id is None:
             return items
         return [item for item in items if item.job_id == job_id]
 
     def delete_match_analysis(self, analysis_id: str) -> bool:
+        if self._db:
+            return self._db.delete_analysis(analysis_id)
         items = self.list_match_analyses()
         kept = [item for item in items if item.analysis_id != analysis_id]
         if len(kept) == len(items):
@@ -422,7 +487,11 @@ class CareerStore:
         analysis.semantic_score = semantic_score
         analysis.semantic_evidence_ids = list(dict.fromkeys(semantic_evidence_ids))
         analysis.model_explanation = model_explanation.strip()
-        self._write_records(self.analyses_path, [asdict(item) for item in items])
+
+        if self._db:
+            self._db.update_analysis(analysis_id, asdict(analysis))
+        else:
+            self._write_records(self.analyses_path, [asdict(item) for item in items])
         return analysis
 
     def add_resume_version(
@@ -453,18 +522,25 @@ class CareerStore:
             gap_notes=gap_notes.strip(),
             created_at=self._timestamp(),
         )
-        items = self.list_resume_versions()
-        items.append(version)
-        self._write_records(self.resume_versions_path, [asdict(item) for item in items])
+        if self._db:
+            self._db.add_version(asdict(version))
+        else:
+            items = self.list_resume_versions()
+            items.append(version)
+            self._write_records(self.resume_versions_path, [asdict(item) for item in items])
         return version
 
     def list_resume_versions(self, job_id: str | None = None) -> list[ResumeVersion]:
+        if self._db:
+            return [ResumeVersion(**item) for item in self._db.list_versions(job_id)]
         items = [ResumeVersion(**item) for item in self._read_records(self.resume_versions_path)]
         if job_id is None:
             return items
         return [item for item in items if item.job_id == job_id]
 
     def delete_resume_version(self, version_id: str) -> bool:
+        if self._db:
+            return self._db.delete_version(version_id)
         items = self.list_resume_versions()
         kept = [item for item in items if item.version_id != version_id]
         if len(kept) == len(items):
@@ -503,12 +579,17 @@ class CareerStore:
             created_at=timestamp,
             updated_at=timestamp,
         )
-        items = self.list_applications()
-        items.append(record)
-        self._write_records(self.applications_path, [asdict(item) for item in items])
+        if self._db:
+            self._db.add_application(asdict(record))
+        else:
+            items = self.list_applications()
+            items.append(record)
+            self._write_records(self.applications_path, [asdict(item) for item in items])
         return record
 
     def list_applications(self) -> list[ApplicationRecord]:
+        if self._db:
+            return [ApplicationRecord(**item) for item in self._db.list_applications()]
         return [ApplicationRecord(**item) for item in self._read_records(self.applications_path)]
 
     def update_application(
@@ -540,11 +621,16 @@ class CareerStore:
             created_at=existing.created_at,
             updated_at=self._timestamp(),
         )
-        records = [updated if item.application_id == application_id else item for item in items]
-        self._write_records(self.applications_path, [asdict(item) for item in records])
+        if self._db:
+            self._db.update_application(application_id, asdict(updated))
+        else:
+            records = [updated if item.application_id == application_id else item for item in items]
+            self._write_records(self.applications_path, [asdict(item) for item in records])
         return updated
 
     def delete_application(self, application_id: str) -> bool:
+        if self._db:
+            return self._db.delete_application(application_id)
         items = self.list_applications()
         kept = [item for item in items if item.application_id != application_id]
         if len(kept) == len(items):

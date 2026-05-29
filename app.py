@@ -4,13 +4,14 @@ import re
 
 import streamlit as st
 
-from career_store import APPLICATION_STATUSES, PROFILE_CATEGORIES, CareerStore, JobPosting
-from rag_agent import RagAssistant, RagConfig
+from api_client import CareerApiClient, RagApiClient
+from career_store import APPLICATION_STATUSES, PROFILE_CATEGORIES, JobPosting
+from rag_agent import RagConfig
 
 
 st.set_page_config(page_title="智能选岗及简历定制 Agent", layout="wide")
 
-PAGES = ["个人档案", "岗位库", "匹配分析", "简历定制", "投递记录", "参考资料库"]
+PAGES = ["个人档案", "岗位库", "匹配分析", "简历定制", "投递记录", "参考资料库", "智能助手"]
 LIBRARY_PAGES = ["资料管理", "资料问答", "检索调试", "摘要与历史"]
 JOB_FORM_KEYS = (
     "new_job_company",
@@ -43,16 +44,14 @@ PROFILE_BASIC_KEYS = {
 }
 
 
-def build_assistant() -> RagAssistant:
-    return RagAssistant(
-        RagConfig(
-            chunk_size=st.session_state.get("chunk_size", RagConfig.chunk_size),
-            chunk_overlap=st.session_state.get("chunk_overlap", RagConfig.chunk_overlap),
-            top_k=st.session_state.get("top_k", RagConfig.top_k),
-            min_relevance_score=st.session_state.get(
-                "min_relevance_score", RagConfig.min_relevance_score
-            ),
-        )
+def build_assistant() -> RagApiClient:
+    return RagApiClient(
+        enable_bm25=st.session_state.get("enable_bm25", True),
+        bm25_weight=st.session_state.get("bm25_weight", 0.3),
+        vector_weight=st.session_state.get("vector_weight", 0.7),
+        rrf_k=st.session_state.get("rrf_k", 60),
+        enable_rerank=st.session_state.get("enable_rerank", True),
+        rerank_top_n=st.session_state.get("rerank_top_n", 10),
     )
 
 
@@ -170,6 +169,27 @@ def show_saved_resume_versions(job_by_id: dict[str, JobPosting]) -> None:
             st.markdown(f"**{PROFILE_CATEGORIES[version.target_category]}**")
             st.write(version.content)
             st.caption(f"创建时间：{version.created_at}")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("导出 Word", key=f"export_docx_{version.version_id}"):
+                    data = assistant.export_resume("docx")
+                    st.download_button(
+                        "下载 Word",
+                        data=data,
+                        file_name=f"{version.name}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"download_docx_{version.version_id}",
+                    )
+            with col2:
+                if st.button("导出 PDF", key=f"export_pdf_{version.version_id}"):
+                    data = assistant.export_resume("pdf")
+                    st.download_button(
+                        "下载 PDF",
+                        data=data,
+                        file_name=f"{version.name}.pdf",
+                        mime="application/pdf",
+                        key=f"download_pdf_{version.version_id}",
+                    )
             if st.button("删除版本", key=f"delete_resume_version_{version.version_id}"):
                 career_store.delete_resume_version(version.version_id)
                 set_message("定制简历版本已删除；已解除投递记录中的版本关联。")
@@ -184,9 +204,17 @@ with st.sidebar:
     st.session_state.min_relevance_score = st.slider(
         "最低相关性", 0.0, 1.0, float(RagConfig.min_relevance_score), 0.05
     )
+    st.divider()
+    st.subheader("混合检索参数")
+    st.session_state.enable_bm25 = st.checkbox("启用 BM25 关键词检索", value=True)
+    st.session_state.bm25_weight = st.slider("BM25 权重", 0.0, 1.0, 0.3, 0.05)
+    st.session_state.vector_weight = 1.0 - st.session_state.bm25_weight
+    st.session_state.rrf_k = st.slider("RRF 常数 (k)", 10, 100, 60, 5)
+    st.session_state.enable_rerank = st.checkbox("启用 Rerank 重排序", value=True)
+    st.session_state.rerank_top_n = st.slider("Rerank 候选数", 5, 20, 10, 1)
 
 assistant = build_assistant()
-career_store = CareerStore()
+career_store = CareerApiClient()
 
 
 @st.fragment
@@ -800,7 +828,7 @@ def render_library_page() -> None:
         for file in files:
             location = (
                 "上传资料"
-                if assistant.config.upload_dir.resolve() in file.resolve().parents
+                if assistant.upload_dir.resolve() in file.resolve().parents
                 else "本地资料"
             )
             file_col, action_col = st.columns([5, 1])
@@ -813,7 +841,7 @@ def render_library_page() -> None:
                 except Exception as exc:
                     st.error(f"删除失败：{exc}")
         uploaded_files = [
-            file for file in files if assistant.config.upload_dir.resolve() in file.resolve().parents
+            file for file in files if assistant.upload_dir.resolve() in file.resolve().parents
         ]
         if uploaded_files and st.button("清空上传资料"):
             removed = assistant.clear_uploads()
@@ -885,6 +913,61 @@ def render_library_page() -> None:
                     refresh_page()
 
 
+@st.fragment
+def render_agent_page() -> None:
+    show_message()
+    st.subheader("智能助手")
+
+    # 初始化聊天历史
+    if "agent_messages" not in st.session_state:
+        st.session_state.agent_messages = []
+
+    # 显示聊天历史
+    for msg in st.session_state.agent_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("steps"):
+                with st.expander("执行步骤"):
+                    for step in msg["steps"]:
+                        st.write(f"**{step['tool_name']}**: {step['tool_output'][:200]}...")
+
+    # 用户输入
+    if prompt := st.chat_input("输入您的问题..."):
+        # 显示用户消息
+        st.session_state.agent_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # 调用 Agent
+        with st.chat_message("assistant"):
+            with st.spinner("正在思考..."):
+                result = assistant.agent(prompt)
+
+            st.markdown(result["answer"])
+            st.session_state.agent_messages.append({
+                "role": "assistant",
+                "content": result["answer"],
+                "steps": result.get("steps", []),
+            })
+
+            # 显示执行步骤
+            if result.get("steps"):
+                with st.expander(f"执行了 {len(result['steps'])} 个工具调用"):
+                    for step in result["steps"]:
+                        st.write(f"**{step['tool_name']}**")
+                        st.write(f"输入: {step['tool_input']}")
+                        st.write(f"输出: {step['tool_output'][:300]}...")
+                        st.divider()
+
+        st.rerun()
+
+    # 清空对话按钮
+    if st.session_state.agent_messages:
+        if st.button("清空对话历史"):
+            st.session_state.agent_messages = []
+            st.rerun()
+
+
 st.title("智能选岗及简历定制 Agent")
 active_page = st.segmented_control(
     "功能导航",
@@ -901,5 +984,6 @@ page_renderers = {
     "简历定制": render_resume_page,
     "投递记录": render_applications_page,
     "参考资料库": render_library_page,
+    "智能助手": render_agent_page,
 }
 page_renderers[active_page]()
