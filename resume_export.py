@@ -32,8 +32,16 @@ CATEGORY_ORDER = ["education", "skill", "project", "award", "availability"]
 def _group_evidence(evidence: list[ProfileEvidence]) -> dict[str, list[ProfileEvidence]]:
     groups: dict[str, list[ProfileEvidence]] = defaultdict(list)
     for e in evidence:
-        groups[e.category].append(e)
+        groups[_field(e, "category")].append(e)
     return groups
+
+
+def _field(item: object, name: str, default: str = "") -> str:
+    if isinstance(item, dict):
+        value = item.get(name, default)
+    else:
+        value = getattr(item, name, default)
+    return default if value is None else str(value)
 
 
 # ============================================================
@@ -161,9 +169,12 @@ def _docx_add_hyperlink(paragraph, text, url):
 
 
 def export_docx(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> bytes:
-    from docx import Document
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm, Pt
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Cm, Pt
+    except ImportError as e:
+        raise RuntimeError(f"导出 Word 需要安装 python-docx: pip install python-docx ({e})")
 
     doc = Document()
     _docx_configure_styles(doc)
@@ -180,40 +191,40 @@ def export_docx(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> b
     name_p = doc.add_paragraph()
     name_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     name_p.paragraph_format.space_after = Pt(1)
-    run = name_p.add_run(profile.name or "姓名")
+    run = name_p.add_run(_field(profile, "name") or "姓名")
     _docx_set_run(run, size=21, color=TEXT_COLOR, bold=True)
 
     # 目标岗位
-    if profile.target_role:
+    if _field(profile, "target_role"):
         target_p = doc.add_paragraph()
         target_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         target_p.paragraph_format.space_after = Pt(3)
-        run = target_p.add_run(f"求职意向：{profile.target_role}")
+        run = target_p.add_run(f"求职意向：{_field(profile, 'target_role')}")
         _docx_set_run(run, size=10.5, color=ACCENT_COLOR, bold=True)
 
     # 联系方式
     contact_parts = []
-    if profile.phone:
-        contact_parts.append(profile.phone)
-    if profile.email:
-        contact_parts.append(profile.email)
-    if profile.city:
-        contact_parts.append(profile.city)
+    if _field(profile, "phone"):
+        contact_parts.append(_field(profile, "phone"))
+    if _field(profile, "email"):
+        contact_parts.append(_field(profile, "email"))
+    if _field(profile, "city"):
+        contact_parts.append(_field(profile, "city"))
     if contact_parts:
         contact_p = doc.add_paragraph()
         contact_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         contact_p.paragraph_format.space_after = Pt(7)
         run = contact_p.add_run("  |  ".join(contact_parts))
         _docx_set_run(run, size=9.2, color=MUTED_COLOR)
-        if profile.homepage:
+        if _field(profile, "homepage"):
             contact_p.add_run("  |  ")
-            _docx_add_hyperlink(contact_p, profile.homepage, profile.homepage)
+            _docx_add_hyperlink(contact_p, _field(profile, "homepage"), _field(profile, "homepage"))
         _docx_bottom_border(contact_p, color="6E98B2", size="9", space="6")
 
     # 个人简介
-    if profile.summary:
+    if _field(profile, "summary"):
         _docx_add_section_heading(doc, "个人概述")
-        _docx_add_body(doc, profile.summary, size=9.6, after=3)
+        _docx_add_body(doc, _field(profile, "summary"), size=9.6, after=3)
 
     # 按 category 分节
     groups = _group_evidence(evidence)
@@ -224,14 +235,14 @@ def export_docx(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> b
         label = CATEGORY_LABELS.get(cat, cat)
         _docx_add_section_heading(doc, label)
         for item in items:
-            if item.title:
+            if _field(item, "title"):
                 title_p = doc.add_paragraph()
                 title_p.paragraph_format.space_before = Pt(1)
                 title_p.paragraph_format.space_after = Pt(1)
                 title_p.paragraph_format.line_spacing = 1.0
-                run = title_p.add_run(item.title)
+                run = title_p.add_run(_field(item, "title"))
                 _docx_set_run(run, size=10.2, color=TEXT_COLOR, bold=True)
-            for line in item.content.split("\n"):
+            for line in _field(item, "content").split("\n"):
                 line = line.strip()
                 if not line:
                     continue
@@ -304,11 +315,14 @@ def _pdf_get_fonts():
 
 
 def export_pdf(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> bytes:
-    from reportlab.lib.colors import HexColor
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.lib.units import cm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, HRFlowable
+    try:
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, HRFlowable
+    except ImportError as e:
+        raise RuntimeError(f"导出 PDF 需要安装 reportlab: pip install reportlab ({e})")
 
     font_cn, _ = _pdf_get_fonts()
 
@@ -366,33 +380,33 @@ def export_pdf(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> by
     story = []
 
     # 姓名
-    story.append(Paragraph(profile.name or "姓名", s_name))
+    story.append(Paragraph(_field(profile, "name") or "姓名", s_name))
 
     # 目标岗位
-    if profile.target_role:
-        story.append(Paragraph(f"求职意向：{profile.target_role}", s_target))
+    if _field(profile, "target_role"):
+        story.append(Paragraph(f"求职意向：{_field(profile, 'target_role')}", s_target))
 
     # 联系方式
     contact_parts = []
-    if profile.phone:
-        contact_parts.append(profile.phone)
-    if profile.email:
-        contact_parts.append(profile.email)
-    if profile.city:
-        contact_parts.append(profile.city)
-    if profile.homepage:
+    if _field(profile, "phone"):
+        contact_parts.append(_field(profile, "phone"))
+    if _field(profile, "email"):
+        contact_parts.append(_field(profile, "email"))
+    if _field(profile, "city"):
+        contact_parts.append(_field(profile, "city"))
+    if _field(profile, "homepage"):
         contact_parts.append(
-            f'<a href="{profile.homepage}" color="#19608A">{profile.homepage}</a>'
+            f'<a href="{_field(profile, "homepage")}" color="#19608A">{_field(profile, "homepage")}</a>'
         )
     if contact_parts:
         story.append(Paragraph("  |  ".join(contact_parts), s_contact))
         story.append(HRFlowable(width="100%", thickness=1, color="#6E98B2", spaceAfter=6))
 
     # 个人简介
-    if profile.summary:
+    if _field(profile, "summary"):
         story.append(Paragraph("<b>个人概述</b>", s_heading))
         story.append(HRFlowable(width="100%", thickness=0.5, color="#B8D0DF", spaceAfter=4))
-        story.append(Paragraph(profile.summary, s_body))
+        story.append(Paragraph(_field(profile, "summary"), s_body))
 
     # 按 category 分节
     groups = _group_evidence(evidence)
@@ -404,9 +418,9 @@ def export_pdf(profile: CandidateProfile, evidence: list[ProfileEvidence]) -> by
         story.append(Paragraph(f"<b>{label}</b>", s_heading))
         story.append(HRFlowable(width="100%", thickness=0.5, color="#B8D0DF", spaceAfter=4))
         for item in items:
-            if item.title:
-                story.append(Paragraph(f"<b>{item.title}</b>", s_title))
-            for line in item.content.split("\n"):
+            if _field(item, "title"):
+                story.append(Paragraph(f"<b>{_field(item, 'title')}</b>", s_title))
+            for line in _field(item, "content").split("\n"):
                 line = line.strip()
                 if not line:
                     continue

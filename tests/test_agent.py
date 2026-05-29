@@ -83,6 +83,39 @@ class AgentToolCallTests(unittest.TestCase):
         self.assertEqual(len(result.steps), 1)
         self.assertEqual(result.steps[0].tool_name, "list_jobs")
 
+    def test_dict_tool_call(self):
+        rag = MagicMock()
+        store = MagicMock()
+        store.load_candidate_profile.return_value = {
+            "name": "张三",
+            "phone": "",
+            "email": "",
+            "city": "",
+            "target_role": "",
+            "preferred_locations": "",
+            "homepage": "",
+            "summary": "",
+        }
+        agent = CareerAgent(rag, store)
+
+        with patch.object(agent, "_get_llm") as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_get_llm.return_value = mock_llm
+            mock_llm.invoke.side_effect = [
+                _make_llm_response(
+                    tool_calls=[
+                        {"name": "get_profile", "args": {}, "id": "call_profile"}
+                    ]
+                ),
+                _make_llm_response(content="已读取个人档案。"),
+            ]
+
+            result = agent.run("读取个人档案")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.answer, "已读取个人档案。")
+        self.assertEqual(result.steps[0].tool_name, "get_profile")
+
     def test_multi_step_tool_calls(self):
         rag = MagicMock()
         store = MagicMock()
@@ -241,6 +274,26 @@ class AgentToolDispatchTests(unittest.TestCase):
         agent = CareerAgent(rag, store)
 
         result = agent._execute_tool("get_profile", {})
+        store.load_candidate_profile.assert_called_once()
+        self.assertIn("张三", result)
+
+    def test_get_profile_accepts_dict_payload(self):
+        rag = MagicMock()
+        store = MagicMock()
+        store.load_candidate_profile.return_value = {
+            "name": "张三",
+            "phone": "13800000000",
+            "email": "",
+            "city": "",
+            "target_role": "",
+            "preferred_locations": "",
+            "homepage": "",
+            "summary": "",
+        }
+        agent = CareerAgent(rag, store)
+
+        result = agent._execute_tool("get_profile", {})
+
         store.load_candidate_profile.assert_called_once()
         self.assertIn("张三", result)
 

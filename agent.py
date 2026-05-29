@@ -68,7 +68,12 @@ class CareerAgent:
         self.career_store = career_store
         self.tools = create_tools(rag_assistant, career_store)
         self.tool_map = {tool.name: tool for tool in self.tools}
-        self._openai_tools = [convert_to_openai_tool(t) for t in self.tools]
+        self._openai_tools = []
+        for t in self.tools:
+            try:
+                self._openai_tools.append(convert_to_openai_tool(t))
+            except Exception:
+                pass  # 跳过无法转换的工具
         self._llm = None
 
     def _get_llm(self) -> ChatOpenAI:
@@ -104,13 +109,14 @@ class CareerAgent:
                 )
 
             if not response.tool_calls:
-                return AgentResult(answer=response.content, steps=steps)
+                return AgentResult(answer=response.content or "抱歉，我无法处理这个请求。", steps=steps)
 
             messages.append(response)
 
             for tool_call in response.tool_calls:
-                tool_name = tool_call.name
-                tool_args = tool_call.args
+                tool_name = self._tool_call_field(tool_call, "name", "")
+                tool_args = self._tool_call_field(tool_call, "args", {}) or {}
+                tool_call_id = self._tool_call_field(tool_call, "id", tool_name)
 
                 tool_result = self._execute_tool(tool_name, tool_args)
 
@@ -122,7 +128,7 @@ class CareerAgent:
 
                 messages.append(ToolMessage(
                     content=tool_result,
-                    tool_call_id=tool_call.id,
+                    tool_call_id=tool_call_id,
                 ))
 
         return AgentResult(
@@ -131,6 +137,12 @@ class CareerAgent:
             success=False,
             error="Max iterations exceeded",
         )
+
+    @staticmethod
+    def _tool_call_field(tool_call: object, name: str, default=None):
+        if isinstance(tool_call, dict):
+            return tool_call.get(name, default)
+        return getattr(tool_call, name, default)
 
     def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """执行单个工具调用。"""

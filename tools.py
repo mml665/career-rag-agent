@@ -5,6 +5,23 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+
+def _field(item: object, name: str, default=""):
+    if isinstance(item, dict):
+        value = item.get(name, default)
+    else:
+        value = getattr(item, name, default)
+    return default if value is None else value
+
+
+def _score(value: object, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 if TYPE_CHECKING:
     from career_store import CareerStore
     from rag_agent import RagAssistant
@@ -52,7 +69,7 @@ def create_tools(rag_assistant: RagAssistant, career_store: CareerStore) -> list
             for i, item in enumerate(results, 1):
                 source = item.get("source", "未知来源")
                 content = item.get("content", "")
-                score = item.get("score", 0)
+                score = _score(item.get("score", 0))
                 formatted.append(f"[{i}] 来源: {source} (相关度: {score:.2f})\n{content}")
             return "\n\n".join(formatted)
         except Exception as e:
@@ -179,14 +196,14 @@ def create_tools(rag_assistant: RagAssistant, career_store: CareerStore) -> list
         try:
             profile = career_store.load_candidate_profile()
             fields = [
-                ("姓名", profile.name),
-                ("电话", profile.phone),
-                ("邮箱", profile.email),
-                ("城市", profile.city),
-                ("求职意向", profile.target_role),
-                ("期望地点", profile.preferred_locations),
-                ("个人主页", profile.homepage),
-                ("个人简介", profile.summary[:200] if profile.summary else ""),
+                ("姓名", _field(profile, "name")),
+                ("电话", _field(profile, "phone")),
+                ("邮箱", _field(profile, "email")),
+                ("城市", _field(profile, "city")),
+                ("求职意向", _field(profile, "target_role")),
+                ("期望地点", _field(profile, "preferred_locations")),
+                ("个人主页", _field(profile, "homepage")),
+                ("个人简介", _field(profile, "summary")[:200] if _field(profile, "summary") else ""),
             ]
             return "\n".join(f"{k}: {v}" for k, v in fields if v)
         except Exception as e:

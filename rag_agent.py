@@ -368,6 +368,7 @@ class RagAssistant:
         results = []
 
         for doc, score in scored_docs:
+            score = self._safe_score(score)
             item = self._source_payload(doc)
             item["score"] = score
             item["accepted"] = score >= self.config.min_relevance_score
@@ -711,8 +712,10 @@ class RagAssistant:
             )
         return sources
 
-    def load_history(self, limit: int = 20) -> list[dict]:
+    def load_history(self, limit: int | None = 20) -> list[dict]:
         records = self._read_history_records()
+        if limit is None:
+            return records
         return records[-limit:]
 
     def delete_history_record(self, history_id: str) -> bool:
@@ -764,11 +767,15 @@ class RagAssistant:
 
         def vector_only() -> list[tuple[Document, float]]:
             # Pure vector retrieval
+            safe_results = [
+                (doc, self._safe_score(score))
+                for doc, score in vector_results[:k]
+            ]
             if not apply_threshold:
-                return vector_results[:k]
+                return safe_results
             return [
                 (doc, score)
-                for doc, score in vector_results[:k]
+                for doc, score in safe_results
                 if score >= self.config.min_relevance_score
             ]
 
@@ -788,6 +795,7 @@ class RagAssistant:
 
         # Add vector results
         for rank, (doc, score) in enumerate(vector_results):
+            score = self._safe_score(score)
             rrf_key = doc.page_content
             rrf_scores[rrf_key] = rrf_scores.get(rrf_key, 0) + (
                 self.config.vector_weight / (self.config.rrf_k + rank + 1)
@@ -797,6 +805,7 @@ class RagAssistant:
 
         # Add BM25 results
         for rank, (doc, score) in enumerate(bm25_results):
+            score = self._safe_score(score)
             rrf_key = doc.page_content
             rrf_scores[rrf_key] = rrf_scores.get(rrf_key, 0) + (
                 self.config.bm25_weight / (self.config.rrf_k + rank + 1)
@@ -844,7 +853,7 @@ class RagAssistant:
             results = []
             for idx, score in reranked[:top_k]:
                 if idx < len(docs):
-                    results.append((docs[idx], score))
+                    results.append((docs[idx], self._safe_score(score)))
             return results
         except Exception:
             # Fallback to original order if rerank fails
@@ -853,6 +862,15 @@ class RagAssistant:
     def _require_api_key_for_rerank(self) -> bool:
         """检查是否有 API key 用于 rerank。"""
         return bool(dashscope_api_key())
+
+    @staticmethod
+    def _safe_score(score: object, default: float = 0.0) -> float:
+        if score is None:
+            return default
+        try:
+            return float(score)
+        except (TypeError, ValueError):
+            return default
 
     def _dashscope_rerank(
         self, query: str, documents: list[str], top_n: int = 10

@@ -15,6 +15,13 @@ class FakeVectorStore:
         ][:k]
 
 
+class FakeVectorStoreWithNoneScore:
+    def similarity_search_with_relevance_scores(self, question: str, k: int):
+        return [
+            (Document(page_content="unknown", metadata={"source_name": "unknown.md"}), None),
+        ][:k]
+
+
 class RetrievalThresholdTests(unittest.TestCase):
     def build_assistant(self, root: Path) -> RagAssistant:
         assistant = RagAssistant(
@@ -48,6 +55,28 @@ class RetrievalThresholdTests(unittest.TestCase):
             self.assertTrue(results[0]["accepted"])
             self.assertFalse(results[1]["accepted"])
             self.assertEqual(results[1]["score"], 0.3)
+
+    def test_search_treats_missing_score_as_zero(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self.build_assistant(Path(temp_dir))
+            assistant._vectorstore = lambda: FakeVectorStoreWithNoneScore()
+
+            results = assistant.search("query", top_k=1)
+
+            self.assertEqual(results[0]["score"], 0.0)
+            self.assertFalse(results[0]["accepted"])
+
+    def test_load_history_without_limit_returns_all_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self.build_assistant(Path(temp_dir))
+            assistant._write_history_records([
+                {"history_id": "h1", "question": "q1"},
+                {"history_id": "h2", "question": "q2"},
+            ])
+
+            results = assistant.load_history(limit=None)
+
+            self.assertEqual([item["history_id"] for item in results], ["h1", "h2"])
 
 
 if __name__ == "__main__":

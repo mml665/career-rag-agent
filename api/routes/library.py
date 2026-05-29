@@ -162,21 +162,36 @@ async def export_resume(
     fmt = body.get("format", "docx")
     profile = store.load_candidate_profile()
     evidence = store.list_profile_evidence()
+    content = (body.get("content") or "").strip()
+    target_category = body.get("target_category") or "project"
+    if content:
+        evidence = [
+            {
+                "category": target_category,
+                "title": body.get("name", "定制简历版本"),
+                "content": content,
+            }
+        ]
 
-    if fmt == "pdf":
-        content = await asyncio.to_thread(export_pdf, profile, evidence)
-        return Response(
-            content=content,
-            media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=resume.pdf"},
-        )
-    else:
-        content = await asyncio.to_thread(export_docx, profile, evidence)
-        return Response(
-            content=content,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": "attachment; filename=resume.docx"},
-        )
+    try:
+        if fmt == "pdf":
+            content = await asyncio.to_thread(export_pdf, profile, evidence)
+            return Response(
+                content=content,
+                media_type="application/pdf",
+                headers={"Content-Disposition": "attachment; filename=resume.pdf"},
+            )
+        else:
+            content = await asyncio.to_thread(export_docx, profile, evidence)
+            return Response(
+                content=content,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": "attachment; filename=resume.docx"},
+            )
+    except RuntimeError as e:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"简历导出失败: {e}")
 
 
 @router.post("/library/agent")
@@ -187,12 +202,20 @@ async def agent_chat(
 ):
     from agent import CareerAgent
 
-    career_agent = CareerAgent(assistant, store)
-    result = await asyncio.to_thread(
-        career_agent.run,
-        body.message,
-        body.max_iterations,
-    )
+    try:
+        career_agent = CareerAgent(assistant, store)
+        result = await asyncio.to_thread(
+            career_agent.run,
+            body.message,
+            body.max_iterations,
+        )
+    except Exception as e:
+        return AgentResponse(
+            answer=f"智能助手初始化失败: {e}",
+            steps=[],
+            success=False,
+            error=str(e),
+        )
 
     return AgentResponse(
         answer=result.answer,

@@ -1,6 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -23,6 +26,11 @@ def create_app() -> FastAPI:
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(request: Request, exc: RuntimeError):
         return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled exception: %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": f"服务器内部错误: {type(exc).__name__}: {exc}"})
 
     from api.routes import (
         profile,
