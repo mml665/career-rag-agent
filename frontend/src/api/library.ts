@@ -1,5 +1,5 @@
 import api from './index'
-import type { AskResponse, SearchResult, DocumentInfo, HistoryRecord, AgentResponse, ResumeExtraction, JobExtraction, TailorResult, SemanticMatchResult } from './types'
+import type { AskResponse, SearchResult, DocumentInfo, HistoryRecord, AgentResponse, AgentMemory, AgentRun, AgentToolCallRecord, ResumeExtraction, JobExtraction, TailorResult, SemanticMatchResult } from './types'
 
 // Config
 export const isConfigured = () =>
@@ -71,6 +71,21 @@ export const exportResume = (
 // Agent
 export const agentChat = (message: string, maxIterations = 10) =>
   api.post<AgentResponse>('/library/agent', { message, max_iterations: maxIterations }).then((r) => r.data)
+
+export const loadAgentMemories = (limit?: number) =>
+  api.get<AgentMemory[]>('/library/agent/memories', { params: limit ? { limit } : {} }).then((r) => r.data)
+
+export const createAgentMemory = (payload: { memory_type?: string; content: string; source?: string; confidence?: number }) =>
+  api.post<AgentMemory>('/library/agent/memories', payload).then((r) => r.data)
+
+export const deleteAgentMemory = (id: string) =>
+  api.delete(`/library/agent/memories/${id}`)
+
+export const loadAgentRuns = (limit = 50) =>
+  api.get<AgentRun[]>('/library/agent/runs', { params: { limit } }).then((r) => r.data)
+
+export const loadAgentToolCalls = (runId: string) =>
+  api.get<AgentToolCallRecord[]>(`/library/agent/runs/${runId}/tool-calls`).then((r) => r.data)
 
 // Summarize
 export const summarize = () =>

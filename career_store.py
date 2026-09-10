@@ -114,6 +114,44 @@ class ResumeVersion:
     created_at: str = ""
 
 
+@dataclass
+class AgentMemory:
+    memory_id: str
+    memory_type: str
+    content: str
+    source: str = ""
+    confidence: float = 1.0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class AgentRun:
+    run_id: str
+    user_message: str
+    final_answer: str = ""
+    success: bool = True
+    error: str = ""
+    tool_call_count: int = 0
+    latency_ms: int = 0
+    model: str = ""
+    context: dict = field(default_factory=dict)
+    memory_snapshot: list[dict] = field(default_factory=list)
+    created_at: str = ""
+
+
+@dataclass
+class AgentToolCallRecord:
+    call_id: str
+    run_id: str
+    tool_name: str
+    tool_input: dict = field(default_factory=dict)
+    tool_output: str = ""
+    latency_ms: int = 0
+    error_message: str = ""
+    created_at: str = ""
+
+
 class CareerStore:
     def __init__(
         self,
@@ -133,6 +171,9 @@ class CareerStore:
             self.analyses_path = data_dir / "match_analyses.json"
             self.applications_path = data_dir / "application_records.json"
             self.resume_versions_path = data_dir / "resume_versions.json"
+            self.agent_memories_path = data_dir / "agent_memories.json"
+            self.agent_runs_path = data_dir / "agent_runs.json"
+            self.agent_tool_calls_path = data_dir / "agent_tool_calls.json"
             self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def load_candidate_profile(self) -> CandidateProfile:
@@ -637,6 +678,198 @@ class CareerStore:
             return False
         self._write_records(self.applications_path, [asdict(item) for item in kept])
         return True
+
+    # ---- Agent memory and audit ----
+
+    def list_agent_memories(self, limit: int | None = None) -> list[AgentMemory]:
+        if self._db:
+            return [AgentMemory(**item) for item in self._db.list_agent_memories(limit)]
+        items = [AgentMemory(**item) for item in self._read_records(self.agent_memories_path)]
+        items.sort(key=lambda item: item.updated_at or item.created_at, reverse=True)
+        if limit is None:
+            return items
+        return items[:limit]
+
+    def remember_agent_memory(
+        self,
+        *,
+        memory_type: str,
+        content: str,
+        source: str = "",
+        confidence: float = 1.0,
+    ) -> AgentMemory:
+        content = content.strip()
+        memory_type = memory_type.strip() or "preference"
+        if not content:
+            raise ValueError("记忆内容不能为空。")
+
+        timestamp = self._timestamp()
+        memories = self.list_agent_memories(limit=None)
+        existing = next(
+            (
+                item
+                for item in memories
+                if item.memory_type == memory_type
+                and self._normalize_text(item.content) == self._normalize_text(content)
+            ),
+            None,
+        )
+        if existing:
+            updated = AgentMemory(
+                memory_id=existing.memory_id,
+                memory_type=existing.memory_type,
+                content=existing.content,
+                source=source.strip() or existing.source,
+                confidence=max(existing.confidence, confidence),
+                created_at=existing.created_at,
+                updated_at=timestamp,
+            )
+            if self._db:
+                self._db.update_agent_memory(existing.memory_id, asdict(updated))
+            else:
+                records = [
+                    updated if item.memory_id == existing.memory_id else item
+                    for item in memories
+                ]
+                self._write_records(
+                    self.agent_memories_path, [asdict(item) for item in records]
+                )
+            return updated
+
+        memory = AgentMemory(
+            memory_id=self._new_id("memory"),
+            memory_type=memory_type,
+            content=content,
+            source=source.strip(),
+            confidence=confidence,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        if self._db:
+            self._db.add_agent_memory(asdict(memory))
+        else:
+            memories.append(memory)
+            self._write_records(self.agent_memories_path, [asdict(item) for item in memories])
+        return memory
+
+    def delete_agent_memory(self, memory_id: str) -> bool:
+        if self._db:
+            return self._db.delete_agent_memory(memory_id)
+        memories = self.list_agent_memories(limit=None)
+        kept = [item for item in memories if item.memory_id != memory_id]
+        if len(kept) == len(memories):
+            return False
+        self._write_records(self.agent_memories_path, [asdict(item) for item in kept])
+        return True
+
+    def build_agent_memory_context(self, limit: int = 8) -> str:
+        memories = self.list_agent_memories(limit=limit)
+        if not memories:
+            return ""
+        labels = {
+            "goal": "求职目标",
+            "preference": "偏好",
+            "constraint": "限制",
+            "feedback": "反馈",
+        }
+        lines = []
+        for memory in memories:
+            label = labels.get(memory.memory_type, memory.memory_type)
+            lines.append(f"- [{label}] {memory.content}")
+        return "\n".join(lines)
+
+    def record_agent_run(
+        self,
+        *,
+        run_id: str,
+        user_message: str,
+        final_answer: str = "",
+        success: bool = True,
+        error: str = "",
+        tool_call_count: int = 0,
+        latency_ms: int = 0,
+        model: str = "",
+        context: dict | None = None,
+        memory_snapshot: list[dict] | None = None,
+    ) -> AgentRun:
+        run = AgentRun(
+            run_id=run_id,
+            user_message=user_message.strip(),
+            final_answer=final_answer.strip(),
+            success=success,
+            error=error.strip(),
+            tool_call_count=tool_call_count,
+            latency_ms=latency_ms,
+            model=model.strip(),
+            context=context or {},
+            memory_snapshot=memory_snapshot or [],
+            created_at=self._timestamp(),
+        )
+        if self._db:
+            self._db.add_agent_run(asdict(run))
+        else:
+            runs = self.list_agent_runs(limit=None)
+            runs.append(run)
+            self._write_records(self.agent_runs_path, [asdict(item) for item in runs])
+        return run
+
+    def list_agent_runs(self, limit: int | None = 50) -> list[AgentRun]:
+        if self._db:
+            return [AgentRun(**item) for item in self._db.list_agent_runs(limit)]
+        runs = [AgentRun(**item) for item in self._read_records(self.agent_runs_path)]
+        runs.sort(key=lambda item: item.created_at, reverse=True)
+        if limit is None:
+            return runs
+        return runs[:limit]
+
+    def record_agent_tool_call(
+        self,
+        *,
+        call_id: str,
+        run_id: str,
+        tool_name: str,
+        tool_input: dict,
+        tool_output: str,
+        latency_ms: int,
+        error_message: str = "",
+    ) -> AgentToolCallRecord:
+        record = AgentToolCallRecord(
+            call_id=call_id or self._new_id("tool_call"),
+            run_id=run_id,
+            tool_name=tool_name,
+            tool_input=tool_input or {},
+            tool_output=tool_output,
+            latency_ms=latency_ms,
+            error_message=error_message,
+            created_at=self._timestamp(),
+        )
+        if self._db:
+            self._db.add_agent_tool_call(asdict(record))
+        else:
+            records = self.list_agent_tool_calls(run_id)
+            records.append(record)
+            all_records = [
+                AgentToolCallRecord(**item)
+                for item in self._read_records(self.agent_tool_calls_path)
+                if item.get("run_id") != run_id
+            ]
+            all_records.extend(records)
+            self._write_records(
+                self.agent_tool_calls_path, [asdict(item) for item in all_records]
+            )
+        return record
+
+    def list_agent_tool_calls(self, run_id: str) -> list[AgentToolCallRecord]:
+        if self._db:
+            return [
+                AgentToolCallRecord(**item)
+                for item in self._db.list_agent_tool_calls(run_id)
+            ]
+        return [
+            AgentToolCallRecord(**item)
+            for item in self._read_records(self.agent_tool_calls_path)
+            if item.get("run_id") == run_id
+        ]
 
     @classmethod
     def _match_skills(

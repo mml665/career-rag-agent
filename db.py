@@ -22,11 +22,14 @@ _JSON_FIELDS: dict[str, set[str]] = {
     "resume_versions": set(),
     "applications": set(),
     "rag_history": {"sources"},
+    "agent_runs": {"context", "memory_snapshot"},
+    "agent_tool_calls": {"tool_input"},
 }
 
 _BOOL_FIELDS: dict[str, set[str]] = {
     "profile_evidence": {"verified"},
     "match_analyses": {"is_stale"},
+    "agent_runs": {"success"},
 }
 
 
@@ -123,6 +126,42 @@ CREATE TABLE IF NOT EXISTS rag_history (
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     sources TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS agent_memories (
+    memory_id TEXT PRIMARY KEY,
+    memory_type TEXT NOT NULL DEFAULT 'preference',
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id TEXT PRIMARY KEY,
+    user_message TEXT NOT NULL,
+    final_answer TEXT NOT NULL DEFAULT '',
+    success INTEGER NOT NULL DEFAULT 1,
+    error TEXT NOT NULL DEFAULT '',
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL DEFAULT '',
+    context TEXT NOT NULL DEFAULT '{}',
+    memory_snapshot TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS agent_tool_calls (
+    call_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    tool_input TEXT NOT NULL DEFAULT '{}',
+    tool_output TEXT NOT NULL DEFAULT '',
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
 );
 """
 
@@ -386,6 +425,95 @@ class Database:
     def clear_history(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM rag_history")
+
+    # ---- Agent memory and audit ----
+
+    def list_agent_memories(self, limit: int | None = None) -> list[dict]:
+        with self._connect() as conn:
+            if limit is None:
+                rows = conn.execute(
+                    "SELECT * FROM agent_memories ORDER BY updated_at DESC, created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM agent_memories ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [self._row_to_dict("agent_memories", dict(r)) for r in rows]
+
+    def add_agent_memory(self, data: dict) -> dict:
+        row = self._dict_to_row("agent_memories", data)
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT INTO agent_memories ({col_names}) VALUES ({placeholders})",
+                [row[c] for c in cols],
+            )
+        return data
+
+    def update_agent_memory(self, memory_id: str, data: dict) -> dict:
+        row = self._dict_to_row("agent_memories", data)
+        set_clause = ", ".join(f"{k} = ?" for k in row)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE agent_memories SET {set_clause} WHERE memory_id = ?",
+                [*row.values(), memory_id],
+            )
+        return data
+
+    def delete_agent_memory(self, memory_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM agent_memories WHERE memory_id = ?", (memory_id,)
+            )
+            return cursor.rowcount > 0
+
+    def add_agent_run(self, data: dict) -> dict:
+        row = self._dict_to_row("agent_runs", data)
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT INTO agent_runs ({col_names}) VALUES ({placeholders})",
+                [row[c] for c in cols],
+            )
+        return data
+
+    def list_agent_runs(self, limit: int | None = 50) -> list[dict]:
+        with self._connect() as conn:
+            if limit is None:
+                rows = conn.execute(
+                    "SELECT * FROM agent_runs ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM agent_runs ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [self._row_to_dict("agent_runs", dict(r)) for r in rows]
+
+    def add_agent_tool_call(self, data: dict) -> dict:
+        row = self._dict_to_row("agent_tool_calls", data)
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT INTO agent_tool_calls ({col_names}) VALUES ({placeholders})",
+                [row[c] for c in cols],
+            )
+        return data
+
+    def list_agent_tool_calls(self, run_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_tool_calls WHERE run_id = ? ORDER BY created_at",
+                (run_id,),
+            ).fetchall()
+            return [self._row_to_dict("agent_tool_calls", dict(r)) for r in rows]
 
     # ---- Helpers ----
 

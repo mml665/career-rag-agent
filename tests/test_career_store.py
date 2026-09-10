@@ -380,6 +380,46 @@ class CareerStoreTests(unittest.TestCase):
 
             self.assertEqual(store.list_applications(), [])
 
+    def test_agent_memory_and_audit_are_saved_in_sqlite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "career.db"
+            store = CareerStore(db_path=db_path)
+
+            memory = store.remember_agent_memory(
+                memory_type="goal",
+                content="优先寻找 AI Agent 应用开发实习。",
+                source="manual",
+            )
+            run = store.record_agent_run(
+                run_id="run_test",
+                user_message="帮我分析岗位",
+                final_answer="已完成。",
+                success=True,
+                tool_call_count=1,
+                latency_ms=12,
+                model="qwen-test",
+                memory_snapshot=[{"memory_id": memory.memory_id}],
+            )
+            call = store.record_agent_tool_call(
+                call_id="call_test",
+                run_id=run.run_id,
+                tool_name="list_jobs",
+                tool_input={"limit": 5},
+                tool_output="暂无岗位。",
+                latency_ms=3,
+            )
+
+            self.assertIn("AI Agent", store.build_agent_memory_context())
+            self.assertEqual(
+                store.list_agent_runs()[0].memory_snapshot[0]["memory_id"],
+                memory.memory_id,
+            )
+            self.assertEqual(
+                store.list_agent_tool_calls(run.run_id)[0].tool_input,
+                {"limit": 5},
+            )
+            self.assertEqual(call.tool_name, "list_jobs")
+
 
 if __name__ == "__main__":
     unittest.main()

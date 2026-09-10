@@ -1,9 +1,12 @@
 import unittest
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from agent import AgentResult, CareerAgent
+from career_store import CareerStore
 
 
 def _make_llm_response(content=None, tool_calls=None):
@@ -350,6 +353,66 @@ class AgentOpenaiToolsTests(unittest.TestCase):
         agent = CareerAgent(rag, store)
 
         self.assertEqual(set(agent.tool_map.keys()), {t.name for t in agent.tools})
+
+
+class AgentMemoryAndAuditTests(unittest.TestCase):
+    """验证 Agent 长期记忆和运行审计。"""
+
+    def test_explicit_memory_is_saved_after_run_and_loaded_next_time(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rag = MagicMock()
+            store = CareerStore(Path(temp_dir))
+            agent = CareerAgent(rag, store)
+
+            with patch.object(agent, "_get_llm") as mock_get_llm:
+                mock_llm = MagicMock()
+                mock_get_llm.return_value = mock_llm
+                mock_llm.invoke.return_value = _make_llm_response(content="已记录。")
+
+                result = agent.run("记住：我优先找上海的 AI Agent 实习。")
+
+            self.assertTrue(result.success)
+            memories = store.list_agent_memories()
+            self.assertEqual(len(memories), 1)
+            self.assertIn("上海", memories[0].content)
+
+            with patch.object(agent, "_get_llm") as mock_get_llm:
+                mock_llm = MagicMock()
+                mock_get_llm.return_value = mock_llm
+                mock_llm.invoke.return_value = _make_llm_response(content="会优先考虑上海。")
+
+                agent.run("帮我推荐岗位")
+
+            system_message = mock_llm.invoke.call_args.args[0][0]
+            self.assertIn("长期记忆", system_message.content)
+            self.assertIn("上海", system_message.content)
+
+    def test_agent_run_and_tool_calls_are_audited(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rag = MagicMock()
+            store = CareerStore(Path(temp_dir))
+            agent = CareerAgent(rag, store)
+
+            with patch.object(agent, "_get_llm") as mock_get_llm:
+                mock_llm = MagicMock()
+                mock_get_llm.return_value = mock_llm
+                mock_llm.invoke.side_effect = [
+                    _make_llm_response(tool_calls=[_make_tool_call("list_jobs", {})]),
+                    _make_llm_response(content="暂无岗位信息。"),
+                ]
+
+                result = agent.run("列出所有岗位")
+
+            runs = store.list_agent_runs()
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0].run_id, result.run_id)
+            self.assertEqual(runs[0].tool_call_count, 1)
+            self.assertTrue(runs[0].success)
+
+            calls = store.list_agent_tool_calls(result.run_id)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].tool_name, "list_jobs")
+            self.assertGreaterEqual(calls[0].latency_ms, 0)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,13 @@ watch(() => store.messages.length, () => {
         <div v-if="msg.role === 'assistant'" v-html="renderMd(msg.content)" class="markdown-body"></div>
         <div v-else>{{ msg.content }}</div>
 
+        <div v-if="msg.role === 'assistant' && msg.runId" class="run-meta">
+          <el-tag size="small" :type="msg.success === false ? 'danger' : 'success'">
+            {{ msg.success === false ? '失败' : '完成' }}
+          </el-tag>
+          <el-text size="small" type="info">运行 ID：{{ msg.runId }}</el-text>
+        </div>
+
         <!-- 工具调用步骤 -->
         <el-collapse v-if="msg.steps?.length" style="margin-top:8px;border:none">
           <el-collapse-item>
@@ -60,6 +67,12 @@ watch(() => store.messages.length, () => {
             </template>
             <div v-for="(step, j) in msg.steps" :key="j" style="margin-bottom:8px;font-size:12px">
               <el-tag size="small" type="info">{{ step.tool_name }}</el-tag>
+              <el-text v-if="step.latency_ms" size="small" type="info" style="margin-left:8px">
+                {{ step.latency_ms }}ms
+              </el-text>
+              <el-text v-if="step.error_message" size="small" type="danger" style="margin-left:8px">
+                {{ step.error_message }}
+              </el-text>
               <pre style="margin:4px 0;background:#f5f5f5;padding:6px;border-radius:4px;overflow-x:auto;font-size:11px">{{ step.tool_output }}</pre>
             </div>
           </el-collapse-item>
@@ -148,4 +161,11 @@ watch(() => store.messages.length, () => {
 }
 .markdown-body :deep(p) { margin: 4px 0; }
 .markdown-body :deep(ul) { margin: 4px 0; padding-left: 20px; }
+.run-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
 </style>

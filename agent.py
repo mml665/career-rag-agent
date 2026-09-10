@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -45,6 +47,9 @@ class AgentStep:
     tool_name: str
     tool_input: dict
     tool_output: str
+    call_id: str = ""
+    latency_ms: int = 0
+    error_message: str = ""
 
 
 @dataclass
@@ -54,6 +59,7 @@ class AgentResult:
     steps: list[AgentStep] = field(default_factory=list)
     success: bool = True
     error: str = ""
+    run_id: str = ""
 
 
 class CareerAgent:
@@ -89,11 +95,20 @@ class CareerAgent:
             )
         return self._llm
 
-    def run(self, user_input: str, max_iterations: int = 10) -> AgentResult:
+    def run(
+        self,
+        user_input: str,
+        max_iterations: int = 10,
+        context: dict | None = None,
+    ) -> AgentResult:
         """执行用户请求，支持多步工具调用。"""
+        run_id = f"run_{uuid4().hex[:12]}"
+        started_at = perf_counter()
         steps = []
+        memory_context = self._load_memory_context()
+        memory_snapshot = self._memory_snapshot()
         messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=self._build_system_prompt(memory_context)),
             HumanMessage(content=user_input),
         ]
 
@@ -101,15 +116,38 @@ class CareerAgent:
             try:
                 response = self._get_llm().invoke(messages, tools=self._openai_tools)
             except Exception as e:
-                return AgentResult(
+                result = AgentResult(
                     answer=f"调用 LLM 失败: {str(e)}",
                     steps=steps,
                     success=False,
                     error=str(e),
+                    run_id=run_id,
                 )
+                self._finalize_run(
+                    run_id,
+                    user_input,
+                    result,
+                    started_at,
+                    context or {},
+                    memory_snapshot,
+                )
+                return result
 
             if not response.tool_calls:
-                return AgentResult(answer=response.content or "抱歉，我无法处理这个请求。", steps=steps)
+                result = AgentResult(
+                    answer=response.content or "抱歉，我无法处理这个请求。",
+                    steps=steps,
+                    run_id=run_id,
+                )
+                self._finalize_run(
+                    run_id,
+                    user_input,
+                    result,
+                    started_at,
+                    context or {},
+                    memory_snapshot,
+                )
+                return result
 
             messages.append(response)
 
@@ -118,12 +156,18 @@ class CareerAgent:
                 tool_args = self._tool_call_field(tool_call, "args", {}) or {}
                 tool_call_id = self._tool_call_field(tool_call, "id", tool_name)
 
+                tool_started_at = perf_counter()
                 tool_result = self._execute_tool(tool_name, tool_args)
+                tool_latency_ms = int((perf_counter() - tool_started_at) * 1000)
+                error_message = self._tool_error_message(tool_result)
 
                 steps.append(AgentStep(
                     tool_name=tool_name,
                     tool_input=tool_args,
                     tool_output=tool_result[:500],
+                    call_id=tool_call_id,
+                    latency_ms=tool_latency_ms,
+                    error_message=error_message,
                 ))
 
                 messages.append(ToolMessage(
@@ -131,12 +175,22 @@ class CareerAgent:
                     tool_call_id=tool_call_id,
                 ))
 
-        return AgentResult(
+        result = AgentResult(
             answer="任务执行步骤过多，请尝试简化请求。",
             steps=steps,
             success=False,
             error="Max iterations exceeded",
+            run_id=run_id,
         )
+        self._finalize_run(
+            run_id,
+            user_input,
+            result,
+            started_at,
+            context or {},
+            memory_snapshot,
+        )
+        return result
 
     @staticmethod
     def _tool_call_field(tool_call: object, name: str, default=None):
@@ -155,3 +209,135 @@ class CareerAgent:
             return str(result)
         except Exception as e:
             return f"工具执行失败: {str(e)}"
+
+    def _build_system_prompt(self, memory_context: str) -> str:
+        if not memory_context:
+            return SYSTEM_PROMPT
+        return (
+            f"{SYSTEM_PROMPT}\n\n"
+            "以下是用户已确认或明确表达过的长期记忆。只在相关时使用，不要编造或覆盖：\n"
+            f"{memory_context}"
+        )
+
+    def _load_memory_context(self) -> str:
+        try:
+            memory_context = self.career_store.build_agent_memory_context(limit=8)
+        except Exception:
+            return ""
+        return memory_context if isinstance(memory_context, str) else ""
+
+    def _memory_snapshot(self) -> list[dict]:
+        try:
+            memories = self.career_store.list_agent_memories(limit=8)
+        except Exception:
+            return []
+        snapshot = []
+        for item in memories:
+            if isinstance(item, dict):
+                snapshot.append(item)
+            else:
+                snapshot.append(
+                    {
+                        "memory_id": getattr(item, "memory_id", ""),
+                        "memory_type": getattr(item, "memory_type", ""),
+                        "content": getattr(item, "content", ""),
+                    }
+                )
+        return snapshot
+
+    def _finalize_run(
+        self,
+        run_id: str,
+        user_input: str,
+        result: AgentResult,
+        started_at: float,
+        context: dict,
+        memory_snapshot: list[dict],
+    ) -> None:
+        latency_ms = int((perf_counter() - started_at) * 1000)
+        try:
+            self.career_store.record_agent_run(
+                run_id=run_id,
+                user_message=user_input,
+                final_answer=result.answer,
+                success=result.success,
+                error=result.error,
+                tool_call_count=len(result.steps),
+                latency_ms=latency_ms,
+                model=self._model_name(),
+                context=context,
+                memory_snapshot=memory_snapshot,
+            )
+            for step in result.steps:
+                self.career_store.record_agent_tool_call(
+                    call_id=step.call_id or f"call_{uuid4().hex[:12]}",
+                    run_id=run_id,
+                    tool_name=step.tool_name,
+                    tool_input=step.tool_input,
+                    tool_output=step.tool_output,
+                    latency_ms=step.latency_ms,
+                    error_message=step.error_message,
+                )
+            for memory_type, content in self._extract_memory_candidates(user_input):
+                self.career_store.remember_agent_memory(
+                    memory_type=memory_type,
+                    content=content,
+                    source=f"agent_run:{run_id}",
+                    confidence=1.0,
+                )
+        except Exception:
+            # 审计和记忆失败不应影响用户主流程。
+            return
+
+    @staticmethod
+    def _tool_error_message(tool_result: str) -> str:
+        if tool_result.startswith("未知工具") or tool_result.startswith("工具执行失败"):
+            return tool_result
+        return ""
+
+    @staticmethod
+    def _extract_memory_candidates(user_input: str) -> list[tuple[str, str]]:
+        text = user_input.strip()
+        if not text:
+            return []
+
+        candidates: list[tuple[str, str]] = []
+        remember_markers = ("记住", "帮我记住", "请记住")
+        if any(marker in text for marker in remember_markers):
+            content = text
+            for marker in remember_markers:
+                content = content.replace(marker, "")
+            content = content.lstrip("：:，, ").strip()
+            if content:
+                candidates.append(("preference", content[:300]))
+
+        goal_markers = ("我的求职目标是", "我的目标岗位是", "我主要想找")
+        for marker in goal_markers:
+            if marker in text:
+                content = text.split(marker, 1)[1].strip("：:，, 。")
+                if content:
+                    candidates.append(("goal", content[:300]))
+                break
+
+        constraint_markers = ("我不考虑", "不要推荐", "不想投")
+        for marker in constraint_markers:
+            if marker in text:
+                content = text.split(marker, 1)[1].strip("：:，, 。")
+                if content:
+                    candidates.append(("constraint", content[:300]))
+                break
+
+        deduped: list[tuple[str, str]] = []
+        seen = set()
+        for item in candidates:
+            key = (item[0], item[1].casefold())
+            if key not in seen:
+                seen.add(key)
+                deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _model_name() -> str:
+        from rag_agent import DEFAULT_CHAT_MODEL
+
+        return os.getenv("OPENAI_MODEL", DEFAULT_CHAT_MODEL)

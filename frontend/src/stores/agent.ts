@@ -7,6 +7,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   steps?: AgentStepResponse[]
+  runId?: string
+  success?: boolean
+  error?: string
 }
 
 export const useAgentStore = defineStore('agent', () => {
@@ -22,6 +25,9 @@ export const useAgentStore = defineStore('agent', () => {
         role: 'assistant',
         content: res.answer,
         steps: res.steps,
+        runId: res.run_id,
+        success: res.success,
+        error: res.error,
       })
     } catch (err: any) {
       const msg = err.response?.data?.detail || err.message || '请求失败，请稍后重试。'

@@ -120,6 +120,9 @@ export interface AgentStepResponse {
   tool_name: string
   tool_input: Record<string, any>
   tool_output: string
+  call_id: string
+  latency_ms: number
+  error_message: string
 }
 
 export interface AgentResponse {
@@ -127,6 +130,42 @@ export interface AgentResponse {
   steps: AgentStepResponse[]
   success: boolean
   error: string
+  run_id: string
+}
+
+export interface AgentMemory {
+  memory_id: string
+  memory_type: string
+  content: string
+  source: string
+  confidence: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentRun {
+  run_id: string
+  user_message: string
+  final_answer: string
+  success: boolean
+  error: string
+  tool_call_count: number
+  latency_ms: number
+  model: string
+  context: Record<string, any>
+  memory_snapshot: Record<string, any>[]
+  created_at: string
+}
+
+export interface AgentToolCallRecord {
+  call_id: string
+  run_id: string
+  tool_name: string
+  tool_input: Record<string, any>
+  tool_output: string
+  latency_ms: number
+  error_message: string
+  created_at: string
 }
 
 // ---- Extraction Results ----

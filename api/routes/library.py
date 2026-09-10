@@ -5,8 +5,12 @@ from fastapi import APIRouter, Depends, UploadFile
 from api.deps import get_career_store, get_rag_assistant
 from api.models import (
     AgentRequest,
+    AgentMemoryCreate,
+    AgentMemoryResponse,
     AgentResponse,
+    AgentRunResponse,
     AgentStepResponse,
+    AgentToolCallRecordResponse,
     AskRequest,
     SearchRequest,
     TailorResumeRequest,
@@ -215,6 +219,7 @@ async def agent_chat(
             career_agent.run,
             body.message,
             body.max_iterations,
+            body.context,
         )
     except Exception as e:
         return AgentResponse(
@@ -231,9 +236,62 @@ async def agent_chat(
                 tool_name=step.tool_name,
                 tool_input=step.tool_input,
                 tool_output=step.tool_output,
+                call_id=step.call_id,
+                latency_ms=step.latency_ms,
+                error_message=step.error_message,
             )
             for step in result.steps
         ],
         success=result.success,
         error=result.error,
+        run_id=result.run_id,
     )
+
+
+@router.get("/library/agent/memories", response_model=list[AgentMemoryResponse])
+def list_agent_memories(
+    limit: int | None = None,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.list_agent_memories(limit)
+
+
+@router.post("/library/agent/memories", response_model=AgentMemoryResponse)
+def create_agent_memory(
+    body: AgentMemoryCreate,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.remember_agent_memory(
+        memory_type=body.memory_type,
+        content=body.content,
+        source=body.source,
+        confidence=body.confidence,
+    )
+
+
+@router.delete("/library/agent/memories/{memory_id}")
+def delete_agent_memory(
+    memory_id: str,
+    store: CareerStore = Depends(get_career_store),
+):
+    store.delete_agent_memory(memory_id)
+    return {"ok": True}
+
+
+@router.get("/library/agent/runs", response_model=list[AgentRunResponse])
+def list_agent_runs(
+    limit: int | None = 50,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.list_agent_runs(limit)
+
+
+@router.get(
+    "/library/agent/runs/{run_id}/tool-calls",
+    response_model=list[AgentToolCallRecordResponse],
+)
+def list_agent_tool_calls(
+    run_id: str,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.list_agent_tool_calls(run_id)

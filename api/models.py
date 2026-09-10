@@ -204,6 +204,9 @@ class AgentStepResponse(BaseModel):
     tool_name: str
     tool_input: dict
     tool_output: str
+    call_id: str = ""
+    latency_ms: int = 0
+    error_message: str = ""
 
 
 class AgentResponse(BaseModel):
@@ -211,3 +214,46 @@ class AgentResponse(BaseModel):
     steps: list[AgentStepResponse] = []
     success: bool = True
     error: str = ""
+    run_id: str = ""
+
+
+class AgentMemoryResponse(BaseModel):
+    memory_id: str
+    memory_type: str
+    content: str
+    source: str = ""
+    confidence: float = 1.0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class AgentMemoryCreate(BaseModel):
+    memory_type: str = "preference"
+    content: str
+    source: str = "manual"
+    confidence: float = 1.0
+
+
+class AgentRunResponse(BaseModel):
+    run_id: str
+    user_message: str
+    final_answer: str = ""
+    success: bool = True
+    error: str = ""
+    tool_call_count: int = 0
+    latency_ms: int = 0
+    model: str = ""
+    context: dict = {}
+    memory_snapshot: list[dict] = []
+    created_at: str = ""
+
+
+class AgentToolCallRecordResponse(BaseModel):
+    call_id: str
+    run_id: str
+    tool_name: str
+    tool_input: dict = {}
+    tool_output: str = ""
+    latency_ms: int = 0
+    error_message: str = ""
+    created_at: str = ""
