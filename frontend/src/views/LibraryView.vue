@@ -6,13 +6,14 @@ import {
   ingestAll, ask, search, summarize, loadHistory, clearHistory, deleteHistoryRecord,
 } from '@/api/library'
 import { useSettingsStore } from '@/stores/settings'
-import type { DocumentInfo, SearchResult, HistoryRecord, AskResponse } from '@/api/types'
+import type { DocumentInfo, DocumentInspection, SearchResult, HistoryRecord, AskResponse } from '@/api/types'
 
 const settings = useSettingsStore()
 const activeTab = ref('manage')
 
 // Document management
 const documents = ref<DocumentInfo[]>([])
+const uploadInspections = ref<DocumentInspection[]>([])
 const uploadLoading = ref(false)
 const indexLoading = ref(false)
 
@@ -43,9 +44,12 @@ onMounted(() => { loadDocuments(); loadHistoryData() })
 async function handleUpload(files: File[]) {
   uploadLoading.value = true
   try {
+    const inspections: DocumentInspection[] = []
     for (const f of files) {
-      await uploadFile(f.name, f)
+      const result = await uploadFile(f.name, f)
+      if (result.inspection) inspections.push(result.inspection)
     }
+    uploadInspections.value = inspections
     ElMessage.success(`已上传 ${files.length} 个文件`)
     await loadDocuments()
   } finally { uploadLoading.value = false }
@@ -137,6 +141,22 @@ async function handleDeleteHistory(id: string) {
           <el-button type="danger" text @click="handleClearDocs">清空全部</el-button>
         </div>
       </div>
+      <div class="card-section" v-if="uploadInspections.length">
+        <h3>上传解析体检</h3>
+        <div v-for="item in uploadInspections" :key="item.filename" style="padding:8px 0;border-bottom:1px solid var(--color-border)">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <el-tag size="small" :type="item.needs_ocr ? 'warning' : 'success'">
+              {{ item.document_type }}
+            </el-tag>
+            <el-text size="small" type="info">{{ item.filename }}</el-text>
+            <el-text size="small" type="info">策略：{{ item.parser_strategy }}</el-text>
+            <el-text size="small" type="info">质量：{{ item.quality_score }}</el-text>
+          </div>
+          <p v-if="item.warnings.length" style="margin:4px 0 0;font-size:12px;color:var(--color-muted)">
+            {{ item.warnings.join(' / ') }}
+          </p>
+        </div>
+      </div>
       <div class="card-section" v-if="documents.length">
         <h3>已上传文档 ({{ documents.length }})</h3>
         <div v-for="d in documents" :key="d.path" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--color-border)">
@@ -155,10 +175,10 @@ async function handleDeleteHistory(id: string) {
       <div class="card-section" v-if="askResult">
         <h3>回答</h3>
         <p style="white-space:pre-wrap">{{ askResult.answer }}</p>
-        <div v-if="askResult.sources?.length" style="margin-top:8px">
+          <div v-if="askResult.sources?.length" style="margin-top:8px">
           <el-text type="info" size="small">参考来源：</el-text>
           <div v-for="(s, i) in askResult.sources" :key="i" style="font-size:12px;color:var(--color-muted);margin-top:2px">
-            {{ s.source }} (chunk #{{ s.chunk_index }})
+            {{ s.source }} · {{ s.heading_path || '全文' }} (chunk #{{ s.chunk_index }})
           </div>
         </div>
       </div>
@@ -176,6 +196,12 @@ async function handleDeleteHistory(id: string) {
           <div style="display:flex;gap:8px;align-items:center">
             <el-tag :type="r.accepted ? 'success' : 'info'" size="small">{{ r.accepted ? '通过' : '过滤' }}</el-tag>
             <el-text type="info" size="small">{{ r.source }} · 分数: {{ r.score.toFixed(3) }}</el-text>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
+            <el-tag size="small" type="info">{{ r.heading_path || '全文' }}</el-tag>
+            <el-text size="small" type="info">{{ r.parser_strategy || 'text' }}</el-text>
+            <el-text size="small" type="info">tokens: {{ r.token_count || 0 }}</el-text>
+            <el-text v-if="r.quality_score !== undefined" size="small" type="info">质量: {{ r.quality_score }}</el-text>
           </div>
           <p style="margin:4px 0 0;font-size:13px;color:var(--color-muted)">{{ r.content }}</p>
         </div>

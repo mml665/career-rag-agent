@@ -1,5 +1,5 @@
 import api from './index'
-import type { AskResponse, SearchResult, DocumentInfo, HistoryRecord, AgentResponse, AgentMemory, AgentRun, AgentToolCallRecord, ResumeExtraction, JobExtraction, TailorResult, SemanticMatchResult } from './types'
+import type { AskResponse, SearchResult, DocumentInfo, DocumentInspection, HistoryRecord, AgentResponse, AgentMemory, AgentRun, AgentToolCallRecord, ResumeExtraction, JobExtraction, TailorResult, SemanticMatchResult } from './types'
 
 // Config
 export const isConfigured = () =>
@@ -22,7 +22,10 @@ export const ingestAll = (params?: { enable_bm25?: boolean; bm25_weight?: number
 
 // Upload
 export const uploadFile = (filename: string, content: Blob) =>
-  api.post('/library/upload', { file: new File([content], filename) }, { headers: { 'Content-Type': 'multipart/form-data' } })
+  api.post<{ ok: boolean; inspection: DocumentInspection }>('/library/upload', { file: new File([content], filename) }, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data)
+
+export const inspectDocument = (path: string) =>
+  api.get<DocumentInspection>('/library/inspect-document', { params: { path } }).then((r) => r.data)
 
 // Documents
 export const listDocuments = () =>

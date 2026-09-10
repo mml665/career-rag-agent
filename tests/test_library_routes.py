@@ -1,8 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
-from api.routes.library import list_documents
+from api.routes.library import list_documents, upload
 from rag_agent import RagAssistant, RagConfig
 
 
@@ -31,6 +32,29 @@ class LibraryRouteTests(unittest.TestCase):
             self.assertEqual(result[0]["name"], "简历写作规范.md")
             self.assertEqual(result[0]["size"], len("content"))
             self.assertTrue(result[0]["path"].endswith("简历写作规范.md"))
+
+    def test_upload_returns_document_inspection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            assistant = RagAssistant(
+                RagConfig(
+                    docs_dir=root / "documents",
+                    upload_dir=root / "uploads",
+                    chroma_dir=root / "chroma",
+                    history_path=root / "history.jsonl",
+                )
+            )
+            file = MagicMock()
+            file.filename = "notes.md"
+            file.read = AsyncMock(return_value=b"# Title\n\ncontent")
+
+            import asyncio
+
+            result = asyncio.run(upload(file, assistant))
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["inspection"]["document_type"], "structured_text")
+            self.assertEqual(result["inspection"]["parser_strategy"], "heading_aware_text")
 
 
 if __name__ == "__main__":

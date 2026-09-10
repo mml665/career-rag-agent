@@ -95,10 +95,40 @@ export interface AskResponse {
 
 export interface SearchResult {
   source: string
+  page?: number | null
   chunk_index: number
+  chunk_id?: string
+  heading_path?: string
+  section_title?: string
+  document_type?: string
+  parser_strategy?: string
+  chunk_strategy?: string
+  token_count?: number
+  quality_score?: number
+  needs_ocr?: boolean
   content: string
   score: number
   accepted: boolean
+}
+
+export interface DocumentInspection {
+  filename: string
+  suffix: string
+  file_type: string
+  document_type: string
+  parser_strategy: string
+  page_count: number
+  text_chars: number
+  avg_chars_per_page: number
+  image_count: number
+  image_pages: number
+  image_page_ratio: number
+  rotated_pages: number[]
+  has_text_layer: boolean
+  needs_ocr: boolean
+  requires_visual_review: boolean
+  quality_score: number
+  warnings: string[]
 }
 
 export interface DocumentInfo {

@@ -68,8 +68,18 @@ async def index(body: dict, assistant: RagAssistant = Depends(get_rag_assistant)
 @router.post("/library/upload")
 async def upload(file: UploadFile, assistant: RagAssistant = Depends(get_rag_assistant)):
     content = await file.read()
-    assistant.save_upload(file.filename, content)
-    return {"ok": True}
+    path = assistant.save_upload(file.filename, content)
+    inspection = await asyncio.to_thread(assistant.inspect_document_file, path)
+    return {"ok": True, "inspection": inspection.to_dict()}
+
+
+@router.get("/library/inspect-document")
+async def inspect_document(
+    path: str,
+    assistant: RagAssistant = Depends(get_rag_assistant),
+):
+    result = await asyncio.to_thread(assistant.inspect_document_file, path)
+    return result.to_dict()
 
 
 @router.get("/library/documents")

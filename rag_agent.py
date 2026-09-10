@@ -21,6 +21,11 @@ from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from bm25_index import BM25Index
+from document_intelligence import (
+    DocumentInspectionReport,
+    inspect_document,
+    split_text_document,
+)
 
 
 load_dotenv()
@@ -209,14 +214,25 @@ class RagAssistant:
         target.write_bytes(content)
         return target
 
+    def inspect_document_file(self, path: Path) -> DocumentInspectionReport:
+        target = Path(path)
+        if target.suffix.lower() not in SUPPORTED_SUFFIXES:
+            raise ValueError("仅支持 PDF、Markdown 或 TXT 文件。")
+        if not target.exists():
+            raise ValueError("文件不存在。")
+        return inspect_document(target)
+
     def extract_resume_upload(self, filename: str, content: bytes) -> ResumeProfileExtraction:
         safe_name = Path(filename).name
         target = self.config.resume_upload_dir / safe_name
         if target.suffix.lower() not in SUPPORTED_SUFFIXES:
             raise ValueError("仅支持 PDF、Markdown 或 TXT 简历。")
         target.write_bytes(content)
+        inspection = self.inspect_document_file(target)
         text = "\n\n".join(doc.page_content for doc in self._load_document(target))
         if not text.strip():
+            if inspection.needs_ocr:
+                raise ValueError("该简历疑似扫描件或拍照 PDF，需要 OCR 识别后再抽取结构化信息。")
             raise ValueError("未能从简历中读取到文本内容。")
         return self.extract_resume_text(text)
 
@@ -246,8 +262,11 @@ class RagAssistant:
         if target.suffix.lower() not in SUPPORTED_SUFFIXES:
             raise ValueError("仅支持 PDF、Markdown 或 TXT 岗位文件。")
         target.write_bytes(content)
+        inspection = self.inspect_document_file(target)
         text = "\n\n".join(doc.page_content for doc in self._load_document(target))
         if not text.strip():
+            if inspection.needs_ocr:
+                raise ValueError("该岗位文件疑似扫描件或拍照 PDF，需要 OCR 识别后再抽取 JD 信息。")
             raise ValueError("未能从岗位文件中读取到文本内容。")
         return self.extract_job_posting_text(text)
 
@@ -321,15 +340,15 @@ class RagAssistant:
         if not docs:
             return 0
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            separators=["\n\n", "\n", "。", "！", "？", ". ", " ", ""],
-        )
-        chunks = splitter.split_documents(docs)
+        chunks = self._split_documents(docs)
         for index, chunk in enumerate(chunks):
             chunk.metadata["chunk_index"] = index
+            chunk.metadata["chunk_id"] = f"chunk_{uuid4().hex[:12]}"
             chunk.metadata["source_name"] = Path(chunk.metadata.get("source", "")).name
+            chunk.metadata["token_count"] = self._count_tokens(chunk.page_content)
+            chunk.metadata["chunk_strategy"] = chunk.metadata.get(
+                "chunk_strategy", "heading_paragraph_sentence_recursive"
+            )
 
         # Add to vector store
         vectorstore = self._vectorstore()
@@ -707,6 +726,14 @@ class RagAssistant:
                 {
                     "source": metadata.get("source_name") or Path(metadata.get("source", "")).name,
                     "chunk_index": metadata.get("chunk_index", 0),
+                    "chunk_id": metadata.get("chunk_id", ""),
+                    "heading_path": metadata.get("heading_path", "全文"),
+                    "section_title": metadata.get("section_title", "全文"),
+                    "document_type": metadata.get("document_type", ""),
+                    "parser_strategy": metadata.get("parser_strategy", ""),
+                    "chunk_strategy": metadata.get("chunk_strategy", ""),
+                    "token_count": metadata.get("token_count", 0),
+                    "quality_score": metadata.get("quality_score", 1.0),
                     "content": self._trim(content),
                 }
             )
@@ -734,17 +761,40 @@ class RagAssistant:
 
     def _load_document(self, path: Path) -> list[Document]:
         suffix = path.suffix.lower()
+        inspection = inspect_document(path)
         if suffix == ".pdf":
             loader = PyPDFLoader(str(path))
+            docs = loader.load()
         elif suffix in {".md", ".markdown", ".txt"}:
             loader = TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
+            loaded = loader.load()
+            text = "\n\n".join(doc.page_content for doc in loaded)
+            docs = split_text_document(path, text)
         else:
             return []
 
-        docs = loader.load()
+        inspection_metadata = inspection.to_metadata()
         for doc in docs:
             doc.metadata["source"] = str(path)
+            doc.metadata.update(inspection_metadata)
+            doc.metadata.setdefault("heading_path", "全文")
+            doc.metadata.setdefault("section_title", "全文")
+            doc.metadata.setdefault("parser_strategy", inspection.parser_strategy)
         return docs
+
+    def _split_documents(self, docs: list[Document]) -> list[Document]:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+            separators=["\n\n", "\n", "。", "！", "？", ". ", " ", ""],
+        )
+        chunks = splitter.split_documents(docs)
+        for chunk in chunks:
+            if not chunk.metadata.get("heading_path"):
+                chunk.metadata["heading_path"] = self._infer_heading_path(chunk.page_content)
+            if not chunk.metadata.get("section_title"):
+                chunk.metadata["section_title"] = chunk.metadata["heading_path"].split(" > ")[-1]
+        return chunks
 
     def _require_api_key(self) -> None:
         if not self.is_configured():
@@ -974,7 +1024,9 @@ class RagAssistant:
             source = doc.metadata.get("source_name") or Path(doc.metadata.get("source", "")).name
             page = doc.metadata.get("page")
             page_text = f", page={page + 1}" if isinstance(page, int) else ""
-            blocks.append(f"[{idx}] source={source}{page_text}\n{doc.page_content}")
+            heading = doc.metadata.get("heading_path")
+            heading_text = f", section={heading}" if heading else ""
+            blocks.append(f"[{idx}] source={source}{page_text}{heading_text}\n{doc.page_content}")
         return "\n\n".join(blocks)
 
     def _source_payload(self, doc: Document) -> dict:
@@ -984,6 +1036,15 @@ class RagAssistant:
             "source": source,
             "page": page + 1 if isinstance(page, int) else None,
             "chunk_index": doc.metadata.get("chunk_index"),
+            "chunk_id": doc.metadata.get("chunk_id", ""),
+            "heading_path": doc.metadata.get("heading_path", "全文"),
+            "section_title": doc.metadata.get("section_title", "全文"),
+            "document_type": doc.metadata.get("document_type", ""),
+            "parser_strategy": doc.metadata.get("parser_strategy", ""),
+            "chunk_strategy": doc.metadata.get("chunk_strategy", ""),
+            "token_count": doc.metadata.get("token_count", 0),
+            "quality_score": doc.metadata.get("quality_score", 1.0),
+            "needs_ocr": doc.metadata.get("needs_ocr", False),
             "content": self._trim(doc.page_content),
         }
 
@@ -1007,6 +1068,33 @@ class RagAssistant:
     def _trim(text: str, max_length: int = 420) -> str:
         cleaned = " ".join(text.split())
         return cleaned if len(cleaned) <= max_length else cleaned[:max_length] + "..."
+
+    @staticmethod
+    def _infer_heading_path(text: str) -> str:
+        for line in text.splitlines()[:8]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            markdown_heading = re.match(r"^#{1,6}\s+(.+)$", stripped)
+            if markdown_heading:
+                return markdown_heading.group(1).strip()
+            if (
+                len(stripped) <= 32
+                and not re.search(r"[。！？.!?]$", stripped)
+                and re.search(r"(项目|经历|技能|教育|岗位|职责|要求|任职|资格|优势|总结)", stripped)
+            ):
+                return stripped
+        return "全文"
+
+    @staticmethod
+    def _count_tokens(text: str) -> int:
+        try:
+            import tiktoken
+
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except Exception:
+            return max(1, len(text) // 2)
 
     @staticmethod
     def _cosine_similarity(first: list[float], second: list[float]) -> float:
