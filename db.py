@@ -18,7 +18,10 @@ _JSON_FIELDS: dict[str, set[str]] = {
         "evidence_map",
         "resume_suggestions",
         "semantic_evidence_ids",
+        "suggestion_cards",
+        "risk_flags",
     },
+    "match_feedback": set(),
     "resume_versions": set(),
     "applications": set(),
     "rag_history": {"sources"},
@@ -90,7 +93,20 @@ CREATE TABLE IF NOT EXISTS match_analyses (
     model_explanation TEXT NOT NULL DEFAULT '',
     is_stale INTEGER NOT NULL DEFAULT 0,
     invalidated_at TEXT NOT NULL DEFAULT '',
+    suggestion_cards TEXT NOT NULL DEFAULT '[]',
+    risk_flags TEXT NOT NULL DEFAULT '[]',
     FOREIGN KEY (job_id) REFERENCES job_postings(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS match_feedback (
+    feedback_id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    rating TEXT NOT NULL,
+    issue_type TEXT NOT NULL DEFAULT '',
+    comment TEXT NOT NULL DEFAULT '',
+    correction TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (analysis_id) REFERENCES match_analyses(analysis_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS applications (
@@ -181,6 +197,19 @@ class Database:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA_SQL)
+            self._ensure_column(conn, "match_analyses", "suggestion_cards", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(conn, "match_analyses", "risk_flags", "TEXT NOT NULL DEFAULT '[]'")
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # ---- CandidateProfile (singleton) ----
 
@@ -306,6 +335,33 @@ class Database:
                 "DELETE FROM match_analyses WHERE analysis_id = ?", (analysis_id,)
             )
             return cursor.rowcount > 0
+
+    # ---- MatchFeedback ----
+
+    def list_match_feedback(self, analysis_id: str | None = None) -> list[dict]:
+        with self._connect() as conn:
+            if analysis_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM match_feedback ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM match_feedback WHERE analysis_id = ? ORDER BY created_at DESC",
+                    (analysis_id,),
+                ).fetchall()
+            return [self._row_to_dict("match_feedback", dict(r)) for r in rows]
+
+    def add_match_feedback(self, data: dict) -> dict:
+        row = self._dict_to_row("match_feedback", data)
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT INTO match_feedback ({col_names}) VALUES ({placeholders})",
+                [row[c] for c in cols],
+            )
+        return data
 
     def invalidate_all_analyses(self) -> None:
         from datetime import datetime

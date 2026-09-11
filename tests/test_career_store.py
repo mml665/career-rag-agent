@@ -141,7 +141,36 @@ class CareerStoreTests(unittest.TestCase):
             self.assertEqual(analysis.matched_requirements, ["Python", "RAG"])
             self.assertEqual(analysis.missing_preferred_skills, ["FastAPI"])
             self.assertEqual(analysis.evidence_ids, [verified.evidence_id])
+            self.assertEqual(analysis.suggestion_cards[0]["skill"], "Python")
+            self.assertEqual(analysis.suggestion_cards[0]["evidence_ids"], [verified.evidence_id])
+            self.assertIn("FastAPI", analysis.risk_flags[0])
             self.assertEqual(store.list_match_analyses(job.job_id)[0].analysis_id, analysis.analysis_id)
+
+    def test_match_feedback_can_be_saved_for_bad_case_iteration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = CareerStore(Path(temp_dir))
+            store.add_profile_evidence(category="skill", content="熟悉 RAG。")
+            job = store.add_job_posting(
+                company="Example",
+                title="Agent 实习生",
+                location="",
+                raw_description="需要 RAG 和 FastAPI。",
+                required_skills=["RAG", "FastAPI"],
+            )
+            analysis = store.analyze_job_match(job.job_id)
+
+            feedback = store.add_match_feedback(
+                analysis_id=analysis.analysis_id,
+                rating="partially_accurate",
+                issue_type="missed_skill",
+                comment="FastAPI 证据后续补充。",
+                correction="缺口应进入 gap_notes。",
+            )
+
+            records = store.list_match_feedback(analysis.analysis_id)
+            self.assertEqual(records[0].feedback_id, feedback.feedback_id)
+            self.assertEqual(records[0].issue_type, "missed_skill")
+            self.assertIn("FastAPI", records[0].comment)
 
     def test_deleting_a_job_removes_its_analysis(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -419,6 +448,28 @@ class CareerStoreTests(unittest.TestCase):
                 {"limit": 5},
             )
             self.assertEqual(call.tool_name, "list_jobs")
+
+    def test_match_feedback_is_saved_in_sqlite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = CareerStore(db_path=Path(temp_dir) / "career.db")
+            store.add_profile_evidence(category="skill", content="熟悉 RAG。")
+            job = store.add_job_posting(
+                company="Example",
+                title="Agent 实习生",
+                location="",
+                raw_description="需要 RAG。",
+                required_skills=["RAG"],
+            )
+            analysis = store.analyze_job_match(job.job_id)
+
+            store.add_match_feedback(
+                analysis_id=analysis.analysis_id,
+                rating="accurate",
+                issue_type="",
+                comment="匹配准确。",
+            )
+
+            self.assertEqual(store.list_match_feedback()[0].rating, "accurate")
 
 
 if __name__ == "__main__":

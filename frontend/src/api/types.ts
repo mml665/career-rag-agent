@@ -57,6 +57,25 @@ export interface MatchAnalysis {
   model_explanation: string
   is_stale: boolean
   invalidated_at: string
+  suggestion_cards: Array<{
+    skill: string
+    suggestion: string
+    evidence_ids: string[]
+    evidence_preview: string[]
+    confidence: number
+    risk_level: string
+  }>
+  risk_flags: string[]
+}
+
+export interface MatchFeedback {
+  feedback_id: string
+  analysis_id: string
+  rating: string
+  issue_type: string
+  comment: string
+  correction: string
+  created_at: string
 }
 
 // ---- ResumeVersion ----

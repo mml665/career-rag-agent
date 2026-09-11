@@ -1,0 +1,31 @@
+{
+  "description": "Career RAG retrieval evaluation seed set. Expand this set with manually labelled queries before citing metrics in a resume.",
+  "cases": [
+    {
+      "id": "resume_001",
+      "query": "简历项目经历应该如何写得具体？",
+      "relevant_sources": ["简历写作规范.md"]
+    },
+    {
+      "id": "interview_001",
+      "query": "面试时如何解释 Agent 和普通 RAG 的区别？",
+      "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+    },
+    {
+      "id": "rag_001",
+      "query": "为什么要把向量检索和 BM25 结合？",
+      "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+    },
+    {
+      "id": "backend_001",
+      "query": "Python 后端岗位通常要求哪些工程能力？",
+      "relevant_sources": ["Python后端工程师岗位要求.md"]
+    },
+    {
+      "id": "company_001",
+      "query": "研究一家互联网公司的时候应该关注哪些内容？",
+      "relevant_sources": ["公司研究模板.md"]
+    }
+  ]
+}
+

@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.deps import get_career_store
-from api.models import MatchAnalysisEnhance, MatchAnalysisResponse
+from api.models import (
+    MatchAnalysisEnhance,
+    MatchAnalysisResponse,
+    MatchFeedbackCreate,
+    MatchFeedbackResponse,
+)
 from career_store import CareerStore
 
 router = APIRouter()
@@ -24,6 +29,22 @@ def enhance_analysis(
     store: CareerStore = Depends(get_career_store),
 ):
     return store.enhance_match_analysis(analysis_id, **body.model_dump())
+
+
+@router.get("/analyses/feedback", response_model=list[MatchFeedbackResponse])
+def list_feedback(
+    analysis_id: str | None = None,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.list_match_feedback(analysis_id)
+
+
+@router.post("/analyses/feedback", response_model=MatchFeedbackResponse)
+def add_feedback(
+    body: MatchFeedbackCreate,
+    store: CareerStore = Depends(get_career_store),
+):
+    return store.add_match_feedback(**body.model_dump())
 
 
 @router.delete("/analyses/{analysis_id}")

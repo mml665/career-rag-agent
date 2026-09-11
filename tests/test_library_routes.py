@@ -4,6 +4,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from api.routes.library import list_documents, upload
+from api.routes.analyses import add_feedback, list_feedback
+from api.models import MatchFeedbackCreate
+from career_store import CareerStore
 from rag_agent import RagAssistant, RagConfig
 
 
@@ -55,6 +58,33 @@ class LibraryRouteTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["inspection"]["document_type"], "structured_text")
             self.assertEqual(result["inspection"]["parser_strategy"], "heading_aware_text")
+
+    def test_match_feedback_routes_return_frontend_shape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = CareerStore(Path(temp_dir))
+            store.add_profile_evidence(category="skill", content="熟悉 RAG。")
+            job = store.add_job_posting(
+                company="Example",
+                title="Agent 实习生",
+                location="",
+                raw_description="需要 RAG。",
+                required_skills=["RAG"],
+            )
+            analysis = store.analyze_job_match(job.job_id)
+
+            created = add_feedback(
+                MatchFeedbackCreate(
+                    analysis_id=analysis.analysis_id,
+                    rating="wrong",
+                    issue_type="wrong_score",
+                    comment="分数偏低。",
+                ),
+                store,
+            )
+            records = list_feedback(analysis.analysis_id, store)
+
+            self.assertEqual(created.rating, "wrong")
+            self.assertEqual(records[0].analysis_id, analysis.analysis_id)
 
 
 if __name__ == "__main__":

@@ -109,12 +109,32 @@ class MatchAnalysisResponse(BaseModel):
     model_explanation: str = ""
     is_stale: bool = False
     invalidated_at: str = ""
+    suggestion_cards: list[dict] = []
+    risk_flags: list[str] = []
 
 
 class MatchAnalysisEnhance(BaseModel):
     semantic_score: float
     semantic_evidence_ids: list[str] = []
     model_explanation: str = ""
+
+
+class MatchFeedbackResponse(BaseModel):
+    feedback_id: str
+    analysis_id: str
+    rating: str
+    issue_type: str = ""
+    comment: str = ""
+    correction: str = ""
+    created_at: str = ""
+
+
+class MatchFeedbackCreate(BaseModel):
+    analysis_id: str
+    rating: str
+    issue_type: str = ""
+    comment: str = ""
+    correction: str = ""
 
 
 # ---- ResumeVersion ----

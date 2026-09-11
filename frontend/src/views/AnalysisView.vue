@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listJobs } from '@/api/jobs'
 import { listEvidence } from '@/api/evidence'
-import { listAnalyses, analyzeMatch, enhanceAnalysis } from '@/api/analyses'
+import { listAnalyses, analyzeMatch, enhanceAnalysis, addMatchFeedback, listMatchFeedback } from '@/api/analyses'
 import { semanticMatch } from '@/api/library'
-import type { JobPosting, MatchAnalysis, ProfileEvidence } from '@/api/types'
+import type { JobPosting, MatchAnalysis, MatchFeedback, ProfileEvidence } from '@/api/types'
 
 const jobs = ref<JobPosting[]>([])
 const evidence = ref<ProfileEvidence[]>([])
@@ -13,6 +13,13 @@ const analyses = ref<MatchAnalysis[]>([])
 const selectedJobId = ref('')
 const loading = ref(false)
 const selectedJob = ref<JobPosting | null>(null)
+const feedback = ref<MatchFeedback[]>([])
+const feedbackForm = reactive({
+  rating: 'partially_accurate',
+  issue_type: 'missed_skill',
+  comment: '',
+  correction: '',
+})
 
 async function loadJobs() {
   try { jobs.value = await listJobs() } catch {}
@@ -26,6 +33,7 @@ onMounted(() => { loadJobs(); loadEvidence() })
 async function onJobChange(jobId: string) {
   selectedJob.value = jobs.value.find(j => j.job_id === jobId) || null
   try { analyses.value = await listAnalyses(jobId) } catch {}
+  await loadFeedback()
 }
 
 async function runKeywordAnalysis() {
@@ -34,6 +42,7 @@ async function runKeywordAnalysis() {
   try {
     const r = await analyzeMatch(selectedJobId.value)
     analyses.value.unshift(r)
+    await loadFeedback()
     ElMessage.success('关键词分析完成')
   } finally { loading.value = false }
 }
@@ -54,8 +63,33 @@ async function runHybridAnalysis() {
       model_explanation: sem.model_explanation,
     })
     analyses.value.unshift(enhanced)
+    await loadFeedback()
     ElMessage.success('混合分析完成')
   } finally { loading.value = false }
+}
+
+async function loadFeedback() {
+  const latest = analyses.value[0]
+  if (!latest) { feedback.value = []; return }
+  try { feedback.value = await listMatchFeedback(latest.analysis_id) } catch {}
+}
+
+async function submitFeedback(analysisId: string) {
+  if (!feedbackForm.comment.trim() && !feedbackForm.correction.trim()) {
+    ElMessage.warning('请填写反馈或修正建议')
+    return
+  }
+  await addMatchFeedback({
+    analysis_id: analysisId,
+    rating: feedbackForm.rating,
+    issue_type: feedbackForm.issue_type,
+    comment: feedbackForm.comment,
+    correction: feedbackForm.correction,
+  })
+  feedbackForm.comment = ''
+  feedbackForm.correction = ''
+  await loadFeedback()
+  ElMessage.success('反馈已记录')
 }
 </script>
 
@@ -108,9 +142,78 @@ async function runHybridAnalysis() {
         <el-alert v-for="(s, i) in a.resume_suggestions" :key="i" :title="s" type="info" show-icon :closable="false" style="margin-bottom:4px" />
       </div>
 
+      <div v-if="a.suggestion_cards?.length" style="margin-top:12px">
+        <h4 style="margin:0 0 8px">证据绑定建议</h4>
+        <el-table :data="a.suggestion_cards" size="small" border>
+          <el-table-column prop="skill" label="技能" width="120" />
+          <el-table-column prop="suggestion" label="建议" />
+          <el-table-column label="证据" min-width="220">
+            <template #default="{ row }">
+              <div style="font-size:12px;color:var(--color-muted);white-space:pre-wrap">
+                {{ row.evidence_ids?.join(', ') || '-' }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="风险" width="90">
+            <template #default="{ row }">
+              <el-tag :type="row.risk_level === 'low' ? 'success' : 'warning'" size="small">{{ row.risk_level }}</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div v-if="a.risk_flags?.length" style="margin-top:12px">
+        <h4 style="margin:0 0 8px">防幻觉风险</h4>
+        <el-alert v-for="(flag, i) in a.risk_flags" :key="i" :title="flag" type="warning" show-icon :closable="false" style="margin-bottom:4px" />
+      </div>
+
       <div v-if="a.model_explanation" style="margin-top:12px">
         <h4 style="margin:0 0 8px">模型解释</h4>
         <p style="font-size:13px;color:var(--color-muted);margin:0;white-space:pre-wrap">{{ a.model_explanation }}</p>
+      </div>
+
+      <div style="margin-top:16px">
+        <h4 style="margin:0 0 8px">分析反馈</h4>
+        <el-form label-width="80px">
+          <el-row :gutter="12">
+            <el-col :span="8">
+              <el-form-item label="准确性">
+                <el-select v-model="feedbackForm.rating" style="width:100%">
+                  <el-option label="基本准确" value="accurate" />
+                  <el-option label="部分准确" value="partially_accurate" />
+                  <el-option label="明显错误" value="wrong" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="问题">
+                <el-select v-model="feedbackForm.issue_type" style="width:100%">
+                  <el-option label="漏匹配技能" value="missed_skill" />
+                  <el-option label="证据不相关" value="irrelevant_evidence" />
+                  <el-option label="幻觉表述" value="hallucination" />
+                  <el-option label="分数不准" value="wrong_score" />
+                  <el-option label="引用错误" value="wrong_citation" />
+                  <el-option label="其他" value="other" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-button type="primary" style="width:100%" @click="submitFeedback(a.analysis_id)">记录反馈</el-button>
+            </el-col>
+          </el-row>
+          <el-form-item label="反馈">
+            <el-input v-model="feedbackForm.comment" placeholder="例如：FastAPI 被漏匹配，证据在项目经历中。" />
+          </el-form-item>
+          <el-form-item label="修正">
+            <el-input v-model="feedbackForm.correction" placeholder="可选：写下正确判断，后续可沉淀为评测样本。" />
+          </el-form-item>
+        </el-form>
+        <el-table v-if="feedback.length" :data="feedback" size="small">
+          <el-table-column prop="rating" label="准确性" width="120" />
+          <el-table-column prop="issue_type" label="问题" width="140" />
+          <el-table-column prop="comment" label="反馈" />
+          <el-table-column prop="created_at" label="时间" width="160" />
+        </el-table>
       </div>
     </div>
 

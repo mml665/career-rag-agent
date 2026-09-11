@@ -25,6 +25,17 @@ APPLICATION_STATUSES = {
     "closed": "结束",
 }
 
+FEEDBACK_RATINGS = {"accurate", "partially_accurate", "wrong"}
+FEEDBACK_ISSUE_TYPES = {
+    "",
+    "irrelevant_evidence",
+    "missed_skill",
+    "hallucination",
+    "wrong_score",
+    "wrong_citation",
+    "other",
+}
+
 
 @dataclass
 class ProfileEvidence:
@@ -85,6 +96,19 @@ class MatchAnalysis:
     model_explanation: str = ""
     is_stale: bool = False
     invalidated_at: str = ""
+    suggestion_cards: list[dict] = field(default_factory=list)
+    risk_flags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MatchFeedback:
+    feedback_id: str
+    analysis_id: str
+    rating: str
+    issue_type: str = ""
+    comment: str = ""
+    correction: str = ""
+    created_at: str = ""
 
 
 @dataclass
@@ -174,6 +198,7 @@ class CareerStore:
             self.agent_memories_path = data_dir / "agent_memories.json"
             self.agent_runs_path = data_dir / "agent_runs.json"
             self.agent_tool_calls_path = data_dir / "agent_tool_calls.json"
+            self.match_feedback_path = data_dir / "match_feedback.json"
             self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def load_candidate_profile(self) -> CandidateProfile:
@@ -454,6 +479,14 @@ class CareerStore:
                 for evidence_id in matched_ids
             )
         )
+        resume_suggestions, suggestion_cards, risk_flags = self._resume_guidance(
+            matched_required=matched_required,
+            matched_preferred=matched_preferred,
+            missing_required=missing_required,
+            missing_preferred=missing_preferred,
+            evidence_map=evidence_map,
+            evidence=verified_evidence,
+        )
         analysis = MatchAnalysis(
             analysis_id=self._new_id("analysis"),
             job_id=job_id,
@@ -469,12 +502,9 @@ class CareerStore:
             missing_preferred_skills=missing_preferred,
             evidence_ids=evidence_ids,
             evidence_map=evidence_map,
-            resume_suggestions=self._resume_suggestions(
-                matched_required,
-                matched_preferred,
-                missing_required,
-                verified_evidence,
-            ),
+            resume_suggestions=resume_suggestions,
+            suggestion_cards=suggestion_cards,
+            risk_flags=risk_flags,
             created_at=self._timestamp(),
             keyword_score=self._skill_score(
                 matched_required,
@@ -534,6 +564,53 @@ class CareerStore:
         else:
             self._write_records(self.analyses_path, [asdict(item) for item in items])
         return analysis
+
+    def add_match_feedback(
+        self,
+        *,
+        analysis_id: str,
+        rating: str,
+        issue_type: str = "",
+        comment: str = "",
+        correction: str = "",
+    ) -> MatchFeedback:
+        if not any(item.analysis_id == analysis_id for item in self.list_match_analyses()):
+            raise ValueError("未找到需要反馈的匹配分析。")
+        if rating not in FEEDBACK_RATINGS:
+            raise ValueError("不支持的反馈评分。")
+        if issue_type not in FEEDBACK_ISSUE_TYPES:
+            raise ValueError("不支持的反馈问题类型。")
+
+        feedback = MatchFeedback(
+            feedback_id=self._new_id("feedback"),
+            analysis_id=analysis_id,
+            rating=rating,
+            issue_type=issue_type,
+            comment=comment.strip(),
+            correction=correction.strip(),
+            created_at=self._timestamp(),
+        )
+        if self._db:
+            self._db.add_match_feedback(asdict(feedback))
+        else:
+            records = self.list_match_feedback(analysis_id=None)
+            records.append(feedback)
+            self._write_records(self.match_feedback_path, [asdict(item) for item in records])
+        return feedback
+
+    def list_match_feedback(self, analysis_id: str | None = None) -> list[MatchFeedback]:
+        if self._db:
+            return [
+                MatchFeedback(**item)
+                for item in self._db.list_match_feedback(analysis_id)
+            ]
+        records = [
+            MatchFeedback(**item)
+            for item in self._read_records(self.match_feedback_path)
+        ]
+        if analysis_id is None:
+            return records
+        return [item for item in records if item.analysis_id == analysis_id]
 
     def add_resume_version(
         self,
@@ -910,21 +987,50 @@ class CareerStore:
         return 0.0
 
     @staticmethod
-    def _resume_suggestions(
+    def _resume_guidance(
+        *,
         matched_required: list[str],
         matched_preferred: list[str],
         missing_required: list[str],
+        missing_preferred: list[str],
+        evidence_map: dict[str, list[str]],
         evidence: list[ProfileEvidence],
-    ) -> list[str]:
+    ) -> tuple[list[str], list[dict], list[str]]:
         suggestions: list[str] = []
+        suggestion_cards: list[dict] = []
+        risk_flags: list[str] = []
         matched = matched_required + matched_preferred
         if matched:
             suggestions.append(f"简历优先呈现可证明这些技能的经历：{', '.join(matched)}。")
+            evidence_by_id = {item.evidence_id: item for item in evidence}
+            for skill in matched:
+                ids = evidence_map.get(skill, [])
+                previews = [
+                    evidence_by_id[evidence_id].content
+                    for evidence_id in ids
+                    if evidence_id in evidence_by_id
+                ]
+                suggestion_cards.append(
+                    {
+                        "skill": skill,
+                        "suggestion": f"围绕 {skill} 强化已有经历表述。",
+                        "evidence_ids": ids,
+                        "evidence_preview": previews[:2],
+                        "confidence": 0.9 if ids else 0.5,
+                        "risk_level": "low" if ids else "medium",
+                    }
+                )
         if missing_required:
             suggestions.append(f"当前证据尚未覆盖必备技能：{', '.join(missing_required)}。")
+            for skill in missing_required:
+                risk_flags.append(f"必备技能「{skill}」缺少已确认履历证据，禁止写成已掌握。")
+        if missing_preferred:
+            for skill in missing_preferred:
+                risk_flags.append(f"加分技能「{skill}」缺少已确认履历证据，只能放入缺口或学习计划。")
         if not evidence:
             suggestions.append("请先录入并确认可用于简历的真实履历证据。")
-        return suggestions
+            risk_flags.append("没有 verified 履历证据，系统不能生成可直接写入简历的能力表述。")
+        return suggestions, suggestion_cards, risk_flags
 
     @staticmethod
     def _read_records(path: Path) -> list[dict]:
