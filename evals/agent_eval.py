@@ -80,6 +80,7 @@ def evaluate_agent_cases(
         expected_sequence = list(case.get("expected_tool_sequence") or [])
         forbidden_tools = set(case.get("forbidden_tools") or [])
         answer = str(result.get("answer", ""))
+        final_error = str(result.get("error", ""))
 
         tool_precision, tool_recall = _tool_metrics(required_tools, actual_tools)
         forbidden_tool_hit = any(tool in forbidden_tools for tool in actual_tools)
@@ -101,6 +102,19 @@ def evaluate_agent_cases(
         step_errors = [_step_error(step) for step in steps if _step_error(step)]
         errors_ok = allow_tool_errors or not step_errors
         pass_case = success_ok and tool_path_ok and answer_ok and tool_count_ok and errors_ok
+        failure_reasons = []
+        if not success_ok:
+            failure_reasons.append("success_state_mismatch")
+        if not tool_path_ok:
+            failure_reasons.append("tool_path_mismatch")
+        if not answer_ok:
+            failure_reasons.append("answer_rule_failed")
+        if not tool_count_ok:
+            failure_reasons.append("too_many_tool_calls")
+        if not errors_ok:
+            failure_reasons.append("tool_error")
+        if final_error:
+            failure_reasons.append("final_error")
 
         details.append(
             {
@@ -118,6 +132,8 @@ def evaluate_agent_cases(
                 "required_tools": required_tools,
                 "actual_tools": actual_tools,
                 "step_errors": step_errors,
+                "final_error": final_error,
+                "failure_reasons": failure_reasons,
             }
         )
 
@@ -170,6 +186,7 @@ def _run_live(golden_cases: list[dict]) -> list[dict]:
                 "case_id": case.get("id", ""),
                 "answer": result.answer,
                 "success": result.success,
+                "error": result.error,
                 "steps": [
                     {
                         "tool_name": step.tool_name,

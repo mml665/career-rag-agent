@@ -8,5 +8,6 @@ __pycache__/
 data/
 output/
 tmp/
+evals/latest_*.json
 frontend/node_modules/
 frontend/dist/
