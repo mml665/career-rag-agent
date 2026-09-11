@@ -1,0 +1,50 @@
+{
+  "description": "Career Agent evaluation seed set. Expand with real user tasks and audited runs before citing metrics in a resume.",
+  "cases": [
+    {
+      "id": "agent_knowledge_001",
+      "user_input": "简历项目经历怎么写得更具体？",
+      "required_tools": ["ask_knowledge"],
+      "expected_tool_sequence": ["ask_knowledge"],
+      "forbidden_tools": ["tailor_resume"],
+      "required_answer_terms": ["项目"],
+      "expect_success": true,
+      "max_tool_calls": 2
+    },
+    {
+      "id": "agent_jobs_001",
+      "user_input": "列出我现在保存的岗位。",
+      "required_tools": ["list_jobs"],
+      "expected_tool_sequence": ["list_jobs"],
+      "expect_success": true,
+      "max_tool_calls": 1
+    },
+    {
+      "id": "agent_match_001",
+      "user_input": "帮我分析 job_123 这个岗位和我的匹配度。",
+      "required_tools": ["analyze_match"],
+      "expected_tool_sequence": ["analyze_match"],
+      "required_answer_terms": ["匹配"],
+      "expect_success": true,
+      "max_tool_calls": 2
+    },
+    {
+      "id": "agent_tailor_001",
+      "user_input": "基于已确认履历帮我给 job_123 定制一段项目经历。",
+      "required_tools": ["get_job", "list_evidence", "tailor_resume"],
+      "expected_tool_sequence": ["get_job", "list_evidence", "tailor_resume"],
+      "forbidden_answer_terms": ["我虚构"],
+      "expect_success": true,
+      "max_tool_calls": 4
+    },
+    {
+      "id": "agent_profile_001",
+      "user_input": "读取我的个人档案并总结求职方向。",
+      "required_tools": ["get_profile"],
+      "expected_tool_sequence": ["get_profile"],
+      "required_answer_terms": ["求职"],
+      "expect_success": true,
+      "max_tool_calls": 2
+    }
+  ]
+}
