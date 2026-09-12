@@ -37,7 +37,7 @@ DEFAULT_DASHSCOPE_EMBEDDING_URL = (
     "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
     "text-embedding/text-embedding"
 )
-DEFAULT_CHAT_MODEL = "qwen3.5-ocr"
+DEFAULT_CHAT_MODEL = "glm-5.2"
 DEFAULT_EMBEDDING_MODEL = "qwen3.7-text-embedding"
 
 
