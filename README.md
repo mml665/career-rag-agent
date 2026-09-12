@@ -105,7 +105,7 @@ flowchart LR
 ### 1. 后端环境
 
 ```powershell
-conda activate Agent
+conda activate pyth310
 pip install -r requirements.txt
 ```
 
@@ -240,6 +240,35 @@ python -m compileall app.py rag_agent.py career_store.py agent.py tools.py api_c
 - 匹配分析和简历定制
 - Tool Calling Agent 的对象式/字典式 tool call 兼容
 - CareerStore 的履历、岗位、分析、投递、版本管理
+
+## 评测
+
+项目提供多测评集评估入口，避免只用少量 seed case 得出虚高指标。当前评测分为 Agent 工具路由和 RAG 检索两类，并按 suite 分开统计：
+
+- Agent：核心能力种子集、真实工作流扩展集、鲁棒性与防误调用集。
+- RAG：核心资料种子集、中文改写泛化集、岗位定制问答集。
+- 指标：Agent 统计 pass rate、tool path accuracy、tool precision / recall；RAG 统计 Recall@K、MRR@K、Hit Rate@K。
+
+稳定回归评测：
+
+```powershell
+conda activate pyth310
+python evals/multi_eval.py --live-agent --live-retrieval --k 5 --output evals/latest_multi_metrics.json
+```
+
+默认配置下，Agent 使用 `fixture_tools` 固定生成型工具输出，真实执行路由、工具选择和错误处理；RAG 使用 `bm25_only` 作为稳定离线关键词基线。需要评估真实向量检索、BM25 融合和 Rerank 时执行：
+
+```powershell
+python evals/multi_eval.py --live-retrieval --retrieval-mode hybrid_live --k 5
+```
+
+需要单独测试模型自主工具选择能力时执行：
+
+```powershell
+python evals/multi_eval.py --live-agent --agent-routing-modes llm_autonomy --output evals/latest_multi_metrics.json
+```
+
+当前指标应作为小样本回归指标使用，不应直接表述为线上泛化准确率。正式汇报效果前，应继续扩展 50 条以上人工标注问题，并把真实用户反馈和失败样本沉淀进评测集。
 
 ## 简历写法示例
 
