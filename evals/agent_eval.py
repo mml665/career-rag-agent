@@ -114,7 +114,7 @@ def evaluate_agent_cases(
             failure_reasons.append("too_many_tool_calls")
         if not errors_ok:
             failure_reasons.append("tool_error")
-        if final_error:
+        if final_error and not allow_tool_errors:
             failure_reasons.append("final_error")
 
         details.append(
@@ -169,7 +169,51 @@ def _load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _run_live(golden_cases: list[dict]) -> list[dict]:
+def _fixture_rag_assistant():
+    from rag_agent import ResumeTailoringResult
+
+    class FixtureRagAssistant:
+        def search(self, question: str, top_k: int | None = None) -> list[dict]:
+            return [
+                {
+                    "source": "fixture://career-knowledge",
+                    "content": f"与问题相关的评测资料：{question}",
+                    "score": 0.91,
+                }
+            ][: top_k or 1]
+
+        def ask(self, question: str, top_k: int | None = None) -> dict:
+            return {
+                "question": question,
+                "answer": (
+                    "可以围绕项目背景、Agent 工具调用、RAG 检索、公司研究、"
+                    f"简历证据和面试表达来回答：{question}"
+                ),
+                "sources": [{"source": "fixture://career-knowledge"}],
+            }
+
+        def tailor_resume(
+            self,
+            job_description: str,
+            evidence: list[str],
+            current_text: str = "",
+            request: str = "",
+        ) -> ResumeTailoringResult:
+            return ResumeTailoringResult(
+                fit_assessment="岗位与已确认履历中的 FastAPI、RAG、Agent 项目经验匹配。",
+                recommended_text="基于已确认项目证据，负责 FastAPI 接口、RAG 检索和 Agent 工具调用闭环。",
+                evidence_basis="; ".join(evidence[:3]),
+                gap_notes="不要编造未验证经历，缺口应单独说明。",
+            )
+
+    return FixtureRagAssistant()
+
+
+def _run_live(
+    golden_cases: list[dict],
+    routing_mode: str = "deterministic_first",
+    tool_mode: str = "live_tools",
+) -> list[dict]:
     from agent import CareerAgent
     from career_store import CareerStore
     from rag_agent import RagAssistant
@@ -198,15 +242,19 @@ def _run_live(golden_cases: list[dict]) -> list[dict]:
             required_skills=["RAG", "FastAPI", "Agent"],
             preferred_skills=["Vue3", "BM25", "Rerank"],
         )
-        agent = CareerAgent(RagAssistant(), store)
+        rag_assistant = _fixture_rag_assistant() if tool_mode == "fixture_tools" else RagAssistant()
+        agent = CareerAgent(rag_assistant, store)
         records = []
         for case in golden_cases:
             user_input = str(case.get("user_input") or case.get("query") or "")
             user_input = user_input.replace("job_123", job.job_id)
+            context = {"eval_case_id": case.get("id", ""), "routing_mode": routing_mode}
+            if routing_mode == "llm_autonomy":
+                context["disable_deterministic_policy"] = True
             result = agent.run(
                 user_input,
                 max_iterations=int(case.get("max_iterations", 8)),
-                context={"eval_case_id": case.get("id", "")},
+                context=context,
             )
             records.append(
                 {
@@ -214,6 +262,8 @@ def _run_live(golden_cases: list[dict]) -> list[dict]:
                     "answer": result.answer,
                     "success": result.success,
                     "error": result.error,
+                    "routing_mode": routing_mode,
+                    "tool_mode": tool_mode,
                     "steps": [
                         {
                             "tool_name": step.tool_name,
@@ -232,13 +282,25 @@ def main() -> None:
     parser.add_argument("--golden", type=Path, default=Path(__file__).with_name("agent_golden_set.json"))
     parser.add_argument("--results", type=Path, help="JSON file containing case_id/answer/success/steps records")
     parser.add_argument("--live", action="store_true", help="Run the current Agent against golden cases")
+    parser.add_argument(
+        "--routing-mode",
+        choices=["deterministic_first", "llm_autonomy"],
+        default="deterministic_first",
+        help="deterministic_first uses the rule router before LLM fallback; llm_autonomy disables that router",
+    )
+    parser.add_argument(
+        "--tool-mode",
+        choices=["live_tools", "fixture_tools"],
+        default="live_tools",
+        help="fixture_tools replaces LLM-backed knowledge/tailoring tools with stable fixtures for CI",
+    )
     parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
 
     golden_payload = _load_json(args.golden)
     golden_cases = golden_payload.get("cases", []) if isinstance(golden_payload, dict) else golden_payload
     if args.live:
-        result_records = _run_live(golden_cases)
+        result_records = _run_live(golden_cases, routing_mode=args.routing_mode, tool_mode=args.tool_mode)
     elif args.results:
         result_payload = _load_json(args.results)
         result_records = result_payload.get("results", []) if isinstance(result_payload, dict) else result_payload

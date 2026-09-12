@@ -182,6 +182,16 @@ CREATE TABLE IF NOT EXISTS agent_tool_calls (
 """
 
 
+class ClosingConnection(sqlite3.Connection):
+    """SQLite connection that closes after context-manager commit/rollback."""
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
+
+
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -189,7 +199,7 @@ class Database:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), factory=ClosingConnection)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         return conn

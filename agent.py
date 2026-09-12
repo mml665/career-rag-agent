@@ -252,8 +252,15 @@ class CareerAgent:
             )
             outputs.append(tool_result)
 
+        step_errors = [step.error_message for step in steps if step.error_message]
         answer = self._render_deterministic_answer(user_input, plan, outputs)
-        result = AgentResult(answer=answer, steps=steps, run_id=run_id)
+        result = AgentResult(
+            answer=answer,
+            steps=steps,
+            success=not step_errors,
+            error="; ".join(step_errors),
+            run_id=run_id,
+        )
         self._finalize_run(
             run_id,
             user_input,
@@ -270,7 +277,15 @@ class CareerAgent:
             return None
 
         job_id = self._extract_job_id(text)
-        if "定制" in text and any(marker in text for marker in ("简历", "履历", "项目经历")):
+        negates_tailoring = re.search(r"(不要|不用|无需|先别|别).{0,6}定制", text) is not None
+        if job_id and ("匹配" in text or "分析" in text) and ("只" in text or negates_tailoring):
+            return [("analyze_match", {"job_id": job_id})]
+
+        if (
+            "定制" in text
+            and not negates_tailoring
+            and any(marker in text for marker in ("简历", "履历", "项目经历"))
+        ):
             if not job_id:
                 return None
             category = "project" if "项目" in text else "skill" if "技能" in text else "project"
@@ -283,13 +298,20 @@ class CareerAgent:
         if job_id and ("匹配" in text or "分析" in text):
             return [("analyze_match", {"job_id": job_id})]
 
+        if job_id and any(marker in text for marker in ("详情", "岗位信息", "JD", "jd", "描述")):
+            return [("get_job", {"job_id": job_id})]
+
+        if "履历证据" in text or "已确认履历" in text:
+            category = "project" if "项目" in text else "skill" if "技能" in text else ""
+            return [("list_evidence", {"category": category})]
+
         if "个人档案" in text or "求职方向" in text:
             return [("get_profile", {})]
 
         if "岗位" in text and any(marker in text for marker in ("列出", "保存", "现在", "有哪些")):
             return [("list_jobs", {})]
 
-        knowledge_markers = ("怎么", "如何", "为什么", "区别", "建议", "规范", "技巧")
+        knowledge_markers = ("怎么", "如何", "为什么", "区别", "建议", "规范", "技巧", "哪些", "什么")
         knowledge_domains = ("简历", "面试", "RAG", "Agent", "公司研究")
         if any(marker in text for marker in knowledge_markers) and any(
             domain in text for domain in knowledge_domains
@@ -411,6 +433,7 @@ class CareerAgent:
             "问答失败",
             "获取岗位列表失败",
             "获取岗位信息失败",
+            "未找到岗位",
             "分析匹配度失败",
             "获取履历证据失败",
             "定制简历失败",

@@ -310,7 +310,8 @@ class AgentErrorHandlingTests(unittest.TestCase):
 
             result = agent.run("列出岗位")
 
-        self.assertTrue(result.success)
+        self.assertFalse(result.success)
+        self.assertIn("数据库错误", result.error)
         # 工具内部捕获异常，返回包含错误信息的字符串
         self.assertIn("失败", result.steps[0].tool_output)
 

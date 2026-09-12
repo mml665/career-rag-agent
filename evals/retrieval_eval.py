@@ -104,9 +104,34 @@ def _load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _run_live(golden_cases: list[dict], k: int) -> list[dict]:
+def _run_bm25_only(golden_cases: list[dict], k: int) -> list[dict]:
+    """Run the persisted BM25 index without online embedding or rerank calls."""
+    from bm25_index import BM25Index
+    from rag_agent import RagAssistant, RagConfig
+
+    assistant = RagAssistant(RagConfig())
+    bm25_index = BM25Index.load(assistant.config.bm25_dir)
+    records = []
+    for case in golden_cases:
+        query = case.get("query", "")
+        scored_docs = bm25_index.search(query, top_k=k * 3)
+        scored_docs = assistant._apply_metadata_boost(query, scored_docs)[:k]
+        results = []
+        for doc, score in scored_docs:
+            item = assistant._source_payload(doc)
+            item["score"] = score
+            item["accepted"] = score > 0
+            results.append(item)
+        records.append({"case_id": case.get("id", ""), "results": results})
+    return records
+
+
+def _run_live(golden_cases: list[dict], k: int, retrieval_mode: str = "hybrid_live") -> list[dict]:
     """Run the current local retriever; no external LLM call is required."""
     from rag_agent import RagAssistant, RagConfig
+
+    if retrieval_mode == "bm25_only":
+        return _run_bm25_only(golden_cases, k)
 
     assistant = RagAssistant(RagConfig())
     records = []
@@ -121,6 +146,12 @@ def main() -> None:
     parser.add_argument("--golden", type=Path, default=Path(__file__).with_name("golden_set.json"))
     parser.add_argument("--results", type=Path, help="JSON file containing case_id/results records")
     parser.add_argument("--live", action="store_true", help="Run the local Chroma/BM25 retriever")
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=["hybrid_live", "bm25_only"],
+        default="hybrid_live",
+        help="hybrid_live uses vector + BM25 + optional rerank; bm25_only is an offline keyword baseline",
+    )
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
@@ -128,7 +159,7 @@ def main() -> None:
     golden_payload = _load_json(args.golden)
     golden_cases = golden_payload.get("cases", []) if isinstance(golden_payload, dict) else golden_payload
     if args.live:
-        result_records = _run_live(golden_cases, args.k)
+        result_records = _run_live(golden_cases, args.k, retrieval_mode=args.retrieval_mode)
     elif args.results:
         result_payload = _load_json(args.results)
         result_records = result_payload.get("results", []) if isinstance(result_payload, dict) else result_payload
@@ -144,4 +175,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

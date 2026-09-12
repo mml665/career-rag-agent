@@ -1,0 +1,119 @@
+{
+  "description": "Multi-suite Career RAG retrieval evaluation set. Labels are source-level and should be upgraded to chunk-level annotations when enough manual data is available.",
+  "suites": [
+    {
+      "id": "retrieval_seed_core",
+      "name": "核心资料种子集",
+      "risk_level": "seed",
+      "description": "覆盖简历、面试、混合检索、后端岗位和公司研究的基础问题。",
+      "cases": [
+        {
+          "id": "resume_001",
+          "query": "简历项目经历应该如何写得具体？",
+          "relevant_sources": ["简历写作规范.md"]
+        },
+        {
+          "id": "interview_001",
+          "query": "面试时如何解释 Agent 和普通 RAG 的区别？",
+          "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "rag_001",
+          "query": "为什么要把向量检索和 BM25 结合？",
+          "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "backend_001",
+          "query": "Python 后端岗位通常要求哪些工程能力？",
+          "relevant_sources": ["Python后端工程师岗位要求.md"]
+        },
+        {
+          "id": "company_001",
+          "query": "研究一家互联网公司的时候应该关注哪些内容？",
+          "relevant_sources": ["公司研究模板.md"]
+        }
+      ]
+    },
+    {
+      "id": "retrieval_paraphrase_cn",
+      "name": "中文改写泛化集",
+      "risk_level": "directional",
+      "description": "同一意图用不同说法表达，检查检索是否只吃固定关键词。",
+      "cases": [
+        {
+          "id": "retrieval_para_resume_001",
+          "query": "项目描述太像 demo，简历上怎样写成有业务价值的经历？",
+          "relevant_sources": ["简历写作规范.md", "面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "retrieval_para_interview_001",
+          "query": "面试被问到求职 Agent 架构怎么讲比较清楚？",
+          "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "retrieval_para_bm25_001",
+          "query": "关键词召回和向量召回为什么要融合排序？",
+          "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "retrieval_para_backend_001",
+          "query": "做 Python 服务端实习，项目里最好体现哪些 API 和测试能力？",
+          "relevant_sources": ["Python后端工程师岗位要求.md"]
+        },
+        {
+          "id": "retrieval_para_company_001",
+          "query": "投递前怎么系统性研究目标公司和岗位？",
+          "relevant_sources": ["公司研究模板.md"]
+        },
+        {
+          "id": "retrieval_para_trend_001",
+          "query": "互联网 AI 应用岗位最近更看重哪些方向？",
+          "relevant_sources": ["互联网行业趋势.md"]
+        },
+        {
+          "id": "retrieval_para_interview_skill_001",
+          "query": "技术面试回答项目难点时应该怎么组织语言？",
+          "relevant_sources": ["面试技巧.md", "面试问答/01_RAG_Agent项目面试问答.md"]
+        },
+        {
+          "id": "retrieval_para_resume_keyword_001",
+          "query": "简历里怎么体现 FastAPI、Chroma、BM25 这些技术点？",
+          "relevant_sources": ["简历写作规范.md", "面试问答/01_RAG_Agent项目面试问答.md"]
+        }
+      ]
+    },
+    {
+      "id": "retrieval_domain_interview",
+      "name": "岗位定制问答集",
+      "risk_level": "directional",
+      "description": "覆盖不同岗位/项目资料，检查默认参考目录下的来源召回。",
+      "cases": [
+        {
+          "id": "retrieval_domain_cs336_001",
+          "query": "CS336 项目如果被问训练和数据处理，应该怎么回答？",
+          "relevant_sources": ["面试问答/02_CS336项目面试问答.md"]
+        },
+        {
+          "id": "retrieval_domain_fullstack_001",
+          "query": "AI 全栈开发实习生会问哪些前后端结合问题？",
+          "relevant_sources": ["面试问答/03_AI全栈开发实习生岗位定制问答.md"]
+        },
+        {
+          "id": "retrieval_domain_aigc_001",
+          "query": "AI Agent 开发实习和 AIGC 岗位面试怎么突出项目？",
+          "relevant_sources": ["面试问答/04_AI_Agent开发实习生_AIGC岗位定制问答.md"]
+        },
+        {
+          "id": "retrieval_domain_geely_001",
+          "query": "吉利汽车 ai 方向实习面试应该准备什么？",
+          "relevant_sources": ["面试问答/05_ai方向实习生_吉利汽车岗位定制问答.md"]
+        },
+        {
+          "id": "retrieval_domain_agent_eval_001",
+          "query": "求职 Agent 项目里模型测评和工具调用评测怎么讲？",
+          "relevant_sources": ["面试问答/01_RAG_Agent项目面试问答.md", "面试问答/04_AI_Agent开发实习生_AIGC岗位定制问答.md"]
+        }
+      ]
+    }
+  ]
+}

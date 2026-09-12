@@ -1,0 +1,190 @@
+{
+  "description": "Multi-suite Career Agent evaluation set. Suites are separated by scenario difficulty so seed metrics are not mixed with robustness metrics.",
+  "suites": [
+    {
+      "id": "agent_seed_core",
+      "name": "核心能力种子集",
+      "risk_level": "seed",
+      "description": "覆盖资料问答、岗位列表、匹配分析、简历定制和个人档案读取。",
+      "cases": [
+        {
+          "id": "agent_knowledge_001",
+          "user_input": "简历项目经历怎么写得更具体？",
+          "required_tools": ["ask_knowledge"],
+          "expected_tool_sequence": ["ask_knowledge"],
+          "forbidden_tools": ["tailor_resume"],
+          "required_answer_terms": ["项目"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_jobs_001",
+          "user_input": "列出我现在保存的岗位。",
+          "required_tools": ["list_jobs"],
+          "expected_tool_sequence": ["list_jobs"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_match_001",
+          "user_input": "帮我分析 job_123 这个岗位和我的匹配度。",
+          "required_tools": ["analyze_match"],
+          "expected_tool_sequence": ["analyze_match"],
+          "required_answer_terms": ["匹配"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_tailor_001",
+          "user_input": "基于已确认履历帮我给 job_123 定制一段项目经历。",
+          "required_tools": ["get_job", "list_evidence", "tailor_resume"],
+          "expected_tool_sequence": ["get_job", "list_evidence", "tailor_resume"],
+          "forbidden_answer_terms": ["我虚构"],
+          "expect_success": true,
+          "max_tool_calls": 4
+        },
+        {
+          "id": "agent_profile_001",
+          "user_input": "读取我的个人档案并总结求职方向。",
+          "required_tools": ["get_profile"],
+          "expected_tool_sequence": ["get_profile"],
+          "required_answer_terms": ["求职"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        }
+      ]
+    },
+    {
+      "id": "agent_workflow_extended",
+      "name": "真实工作流扩展集",
+      "risk_level": "regression",
+      "description": "用更接近用户自然表达的说法覆盖多步工作流和单工具工作流。",
+      "cases": [
+        {
+          "id": "agent_ext_tailor_project_001",
+          "user_input": "看一下 job_123 的要求，然后基于已确认履历给我定制项目经历。",
+          "required_tools": ["get_job", "list_evidence", "tailor_resume"],
+          "expected_tool_sequence": ["get_job", "list_evidence", "tailor_resume"],
+          "expect_success": true,
+          "max_tool_calls": 4
+        },
+        {
+          "id": "agent_ext_tailor_skill_001",
+          "user_input": "帮我给 job_123 定制技能部分简历，但只能用已确认履历。",
+          "required_tools": ["get_job", "list_evidence", "tailor_resume"],
+          "expected_tool_sequence": ["get_job", "list_evidence", "tailor_resume"],
+          "forbidden_answer_terms": ["我会编造", "我可以虚构"],
+          "expect_success": true,
+          "max_tool_calls": 4
+        },
+        {
+          "id": "agent_ext_match_gap_001",
+          "user_input": "job_123 匹配情况分析一下，重点看缺少什么。",
+          "required_tools": ["analyze_match"],
+          "expected_tool_sequence": ["analyze_match"],
+          "required_answer_terms": ["缺少"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_ext_job_detail_001",
+          "user_input": "打开 job_123 的岗位详情和 JD 描述给我看看。",
+          "required_tools": ["get_job"],
+          "expected_tool_sequence": ["get_job"],
+          "required_answer_terms": ["岗位"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_ext_evidence_001",
+          "user_input": "列出我现在已确认履历证据，尤其是项目相关的。",
+          "required_tools": ["list_evidence"],
+          "expected_tool_sequence": ["list_evidence"],
+          "required_answer_terms": ["履历"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_ext_saved_jobs_001",
+          "user_input": "现在有哪些岗位可以投？",
+          "required_tools": ["list_jobs"],
+          "expected_tool_sequence": ["list_jobs"],
+          "required_answer_terms": ["岗位"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_ext_company_research_001",
+          "user_input": "公司研究应该从哪些维度做？",
+          "required_tools": ["ask_knowledge"],
+          "expected_tool_sequence": ["ask_knowledge"],
+          "required_answer_terms": ["公司"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_ext_interview_001",
+          "user_input": "面试官问 Agent 和普通 RAG 的区别，我怎么答？",
+          "required_tools": ["ask_knowledge"],
+          "expected_tool_sequence": ["ask_knowledge"],
+          "required_answer_terms": ["Agent"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        }
+      ]
+    },
+    {
+      "id": "agent_guardrail_robustness",
+      "name": "鲁棒性与防误调用集",
+      "risk_level": "robustness",
+      "description": "验证否定表达、只读意图、错误 job_id 等场景不会被错误执行成其他工作流。",
+      "cases": [
+        {
+          "id": "agent_guardrail_list_only_001",
+          "user_input": "不要定制简历，先列出保存岗位就行。",
+          "required_tools": ["list_jobs"],
+          "expected_tool_sequence": ["list_jobs"],
+          "forbidden_tools": ["tailor_resume", "analyze_match"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_guardrail_match_only_001",
+          "user_input": "job_123 只做匹配分析，不要定制简历。",
+          "required_tools": ["analyze_match"],
+          "expected_tool_sequence": ["analyze_match"],
+          "forbidden_tools": ["tailor_resume"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_guardrail_profile_only_001",
+          "user_input": "读取个人档案，不要列岗位。",
+          "required_tools": ["get_profile"],
+          "expected_tool_sequence": ["get_profile"],
+          "forbidden_tools": ["list_jobs"],
+          "expect_success": true,
+          "max_tool_calls": 1
+        },
+        {
+          "id": "agent_guardrail_knowledge_only_001",
+          "user_input": "我只是想了解 RAG 和 Agent 的区别，不要分析岗位。",
+          "required_tools": ["ask_knowledge"],
+          "expected_tool_sequence": ["ask_knowledge"],
+          "forbidden_tools": ["analyze_match", "tailor_resume"],
+          "expect_success": true,
+          "max_tool_calls": 2
+        },
+        {
+          "id": "agent_guardrail_bad_job_001",
+          "user_input": "帮我分析 job_missing_404 这个岗位的匹配度。",
+          "required_tools": ["analyze_match"],
+          "expected_tool_sequence": ["analyze_match"],
+          "expect_success": false,
+          "allow_tool_errors": true,
+          "max_tool_calls": 2
+        }
+      ]
+    }
+  ]
+}
