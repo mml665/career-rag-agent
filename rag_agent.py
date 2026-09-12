@@ -35,10 +35,10 @@ SUPPORTED_SUFFIXES = {".pdf", ".md", ".markdown", ".txt"}
 DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_DASHSCOPE_EMBEDDING_URL = (
     "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
-    "multimodal-embedding/multimodal-embedding"
+    "text-embedding/text-embedding"
 )
-DEFAULT_CHAT_MODEL = "qwen3.6-plus"
-DEFAULT_EMBEDDING_MODEL = "tongyi-embedding-vision-flash-2026-03-06"
+DEFAULT_CHAT_MODEL = "qwen3.5-ocr"
+DEFAULT_EMBEDDING_MODEL = "qwen3.7-text-embedding"
 
 
 def dashscope_api_key() -> str:
@@ -124,7 +124,7 @@ class SemanticMatchResult:
 
 
 class DashScopeMultimodalEmbeddings(Embeddings):
-    """LangChain embedding adapter for DashScope multimodal independent vectors."""
+    """LangChain embedding adapter for DashScope text embedding vectors."""
 
     def __init__(
         self,
@@ -157,7 +157,7 @@ class DashScopeMultimodalEmbeddings(Embeddings):
 
         payload = {
             "model": self.model,
-            "input": {"contents": [{"text": text} for text in texts]},
+            "input": {"texts": texts},
             "parameters": {"dimension": self.dimension},
         }
         response = requests.post(
@@ -178,6 +178,8 @@ class DashScopeMultimodalEmbeddings(Embeddings):
     @staticmethod
     def parse_embeddings(payload: dict, expected_count: int | None = None) -> list[list[float]]:
         embeddings = payload.get("output", {}).get("embeddings", [])
+        if not embeddings and isinstance(payload.get("data"), list):
+            embeddings = payload["data"]
         if not embeddings:
             raise RuntimeError(f"DashScope embedding 响应中没有向量：{payload}")
 

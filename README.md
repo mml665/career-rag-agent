@@ -19,8 +19,8 @@
 | 前端 | Vue 3、TypeScript、Vite、Element Plus、Pinia、Vue Router、Axios、marked |
 | 后端 | FastAPI、Pydantic、Uvicorn |
 | Agent | LangChain Tool Calling、ReAct 多步工具调用 |
-| LLM | DashScope OpenAI 兼容接口，默认 `qwen3.6-plus` |
-| Embedding | DashScope `tongyi-embedding-vision-flash-2026-03-06` |
+| LLM | DashScope OpenAI 兼容接口，默认 `qwen3.5-ocr` |
+| Embedding | DashScope `qwen3.7-text-embedding` |
 | 检索 | Chroma、BM25、jieba、RRF、DashScope Rerank |
 | 存储 | SQLite、JSON 迁移兼容 |
 | 导出 | python-docx、reportlab |
@@ -114,8 +114,8 @@ pip install -r requirements.txt
 ```env
 DASHSCOPE_API_KEY=your_dashscope_api_key_here
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-OPENAI_MODEL=qwen3.6-plus
-OPENAI_EMBEDDING_MODEL=tongyi-embedding-vision-flash-2026-03-06
+OPENAI_MODEL=qwen3.5-ocr
+OPENAI_EMBEDDING_MODEL=qwen3.7-text-embedding
 ```
 
 启动 FastAPI：
