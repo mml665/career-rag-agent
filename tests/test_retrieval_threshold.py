@@ -31,6 +31,7 @@ class RetrievalThresholdTests(unittest.TestCase):
                 chroma_dir=root / "chroma",
                 history_path=root / "history.jsonl",
                 min_relevance_score=0.45,
+                enable_bm25=False,
             )
         )
         assistant._vectorstore = lambda: FakeVectorStore()
@@ -65,6 +66,30 @@ class RetrievalThresholdTests(unittest.TestCase):
 
             self.assertEqual(results[0]["score"], 0.0)
             self.assertFalse(results[0]["accepted"])
+
+    def test_metadata_boost_promotes_matching_source_and_heading(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            assistant = self.build_assistant(Path(temp_dir))
+            docs = [
+                (
+                    Document(
+                        page_content="通用面试准备内容",
+                        metadata={"source_name": "面试技巧.md", "heading_path": "面试准备"},
+                    ),
+                    0.0162,
+                ),
+                (
+                    Document(
+                        page_content="公司业务、技术栈和工程文化研究模板",
+                        metadata={"source_name": "公司研究模板.md", "heading_path": "公司研究分析模板"},
+                    ),
+                    0.0160,
+                ),
+            ]
+
+            boosted = assistant._apply_metadata_boost("研究一家互联网公司的时候应该关注哪些内容？", docs)
+
+            self.assertEqual(boosted[0][0].metadata["source_name"], "公司研究模板.md")
 
     def test_load_history_without_limit_returns_all_records(self):
         with tempfile.TemporaryDirectory() as temp_dir:

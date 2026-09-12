@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -173,31 +174,57 @@ def _run_live(golden_cases: list[dict]) -> list[dict]:
     from career_store import CareerStore
     from rag_agent import RagAssistant
 
-    agent = CareerAgent(RagAssistant(), CareerStore())
-    records = []
-    for case in golden_cases:
-        result = agent.run(
-            str(case.get("user_input") or case.get("query") or ""),
-            max_iterations=int(case.get("max_iterations", 8)),
-            context={"eval_case_id": case.get("id", "")},
+    with tempfile.TemporaryDirectory() as temp_dir:
+        store = CareerStore(Path(temp_dir) / "career")
+        store.save_candidate_profile(
+            name="评测候选人",
+            city="上海",
+            target_role="AI Agent 应用开发实习生",
+            summary="关注 RAG、Tool Calling、FastAPI 与前端工程化。",
         )
-        records.append(
-            {
-                "case_id": case.get("id", ""),
-                "answer": result.answer,
-                "success": result.success,
-                "error": result.error,
-                "steps": [
-                    {
-                        "tool_name": step.tool_name,
-                        "tool_input": step.tool_input,
-                        "error_message": step.error_message,
-                    }
-                    for step in result.steps
-                ],
-            }
+        store.add_profile_evidence(
+            category="project",
+            content="使用 FastAPI、Vue3、Chroma、BM25、RRF 和 LangChain Tool Calling 实现求职 Agent。",
         )
-    return records
+        store.add_profile_evidence(
+            category="skill",
+            content="熟悉 Python、FastAPI、RAG、向量检索、BM25、Rerank 和自动化测试。",
+        )
+        job = store.add_job_posting(
+            company="评测科技",
+            title="AI Agent 开发实习生",
+            location="上海",
+            raw_description="负责 RAG 应用、Agent 工具调用、FastAPI 接口和前端页面开发。",
+            required_skills=["RAG", "FastAPI", "Agent"],
+            preferred_skills=["Vue3", "BM25", "Rerank"],
+        )
+        agent = CareerAgent(RagAssistant(), store)
+        records = []
+        for case in golden_cases:
+            user_input = str(case.get("user_input") or case.get("query") or "")
+            user_input = user_input.replace("job_123", job.job_id)
+            result = agent.run(
+                user_input,
+                max_iterations=int(case.get("max_iterations", 8)),
+                context={"eval_case_id": case.get("id", "")},
+            )
+            records.append(
+                {
+                    "case_id": case.get("id", ""),
+                    "answer": result.answer,
+                    "success": result.success,
+                    "error": result.error,
+                    "steps": [
+                        {
+                            "tool_name": step.tool_name,
+                            "tool_input": step.tool_input,
+                            "error_message": step.error_message,
+                        }
+                        for step in result.steps
+                    ],
+                }
+            )
+        return records
 
 
 def main() -> None:

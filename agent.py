@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING
@@ -104,9 +105,20 @@ class CareerAgent:
         """执行用户请求，支持多步工具调用。"""
         run_id = f"run_{uuid4().hex[:12]}"
         started_at = perf_counter()
+        run_context = context or {}
         steps = []
         memory_context = self._load_memory_context()
         memory_snapshot = self._memory_snapshot()
+        if not run_context.get("disable_deterministic_policy"):
+            deterministic = self._run_deterministic_policy(
+                user_input,
+                run_id,
+                started_at,
+                run_context,
+                memory_snapshot,
+            )
+            if deterministic is not None:
+                return deterministic
         messages = [
             SystemMessage(content=self._build_system_prompt(memory_context)),
             HumanMessage(content=user_input),
@@ -128,7 +140,7 @@ class CareerAgent:
                     user_input,
                     result,
                     started_at,
-                    context or {},
+                    run_context,
                     memory_snapshot,
                 )
                 return result
@@ -144,7 +156,7 @@ class CareerAgent:
                     user_input,
                     result,
                     started_at,
-                    context or {},
+                    run_context,
                     memory_snapshot,
                 )
                 return result
@@ -187,7 +199,7 @@ class CareerAgent:
             user_input,
             result,
             started_at,
-            context or {},
+            run_context,
             memory_snapshot,
         )
         return result
@@ -209,6 +221,107 @@ class CareerAgent:
             return str(result)
         except Exception as e:
             return f"工具执行失败: {str(e)}"
+
+    def _run_deterministic_policy(
+        self,
+        user_input: str,
+        run_id: str,
+        started_at: float,
+        context: dict,
+        memory_snapshot: list[dict],
+    ) -> AgentResult | None:
+        plan = self._deterministic_plan(user_input)
+        if not plan:
+            return None
+
+        steps: list[AgentStep] = []
+        outputs = []
+        for tool_name, tool_args in plan:
+            tool_started_at = perf_counter()
+            tool_result = self._execute_tool(tool_name, tool_args)
+            tool_latency_ms = int((perf_counter() - tool_started_at) * 1000)
+            steps.append(
+                AgentStep(
+                    tool_name=tool_name,
+                    tool_input=tool_args,
+                    tool_output=tool_result[:500],
+                    call_id=f"call_{uuid4().hex[:12]}",
+                    latency_ms=tool_latency_ms,
+                    error_message=self._tool_error_message(tool_result),
+                )
+            )
+            outputs.append(tool_result)
+
+        answer = self._render_deterministic_answer(user_input, plan, outputs)
+        result = AgentResult(answer=answer, steps=steps, run_id=run_id)
+        self._finalize_run(
+            run_id,
+            user_input,
+            result,
+            started_at,
+            context,
+            memory_snapshot,
+        )
+        return result
+
+    def _deterministic_plan(self, user_input: str) -> list[tuple[str, dict]] | None:
+        text = user_input.strip()
+        if not text:
+            return None
+
+        job_id = self._extract_job_id(text)
+        if "定制" in text and any(marker in text for marker in ("简历", "履历", "项目经历")):
+            if not job_id:
+                return None
+            category = "project" if "项目" in text else "skill" if "技能" in text else "project"
+            return [
+                ("get_job", {"job_id": job_id}),
+                ("list_evidence", {"category": ""}),
+                ("tailor_resume", {"job_id": job_id, "category": category}),
+            ]
+
+        if job_id and ("匹配" in text or "分析" in text):
+            return [("analyze_match", {"job_id": job_id})]
+
+        if "个人档案" in text or "求职方向" in text:
+            return [("get_profile", {})]
+
+        if "岗位" in text and any(marker in text for marker in ("列出", "保存", "现在", "有哪些")):
+            return [("list_jobs", {})]
+
+        knowledge_markers = ("怎么", "如何", "为什么", "区别", "建议", "规范", "技巧")
+        knowledge_domains = ("简历", "面试", "RAG", "Agent", "公司研究")
+        if any(marker in text for marker in knowledge_markers) and any(
+            domain in text for domain in knowledge_domains
+        ):
+            return [("ask_knowledge", {"question": text, "top_k": 4})]
+
+        return None
+
+    @staticmethod
+    def _extract_job_id(text: str) -> str:
+        match = re.search(r"\bjob_[A-Za-z0-9_-]+\b", text)
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _render_deterministic_answer(
+        user_input: str,
+        plan: list[tuple[str, dict]],
+        outputs: list[str],
+    ) -> str:
+        tool_names = [tool_name for tool_name, _ in plan]
+        last_output = outputs[-1] if outputs else ""
+        if tool_names == ["list_jobs"]:
+            return f"岗位列表如下：\n{last_output}"
+        if tool_names == ["get_profile"]:
+            return f"求职方向与个人档案如下：\n{last_output}"
+        if tool_names == ["analyze_match"]:
+            return f"匹配分析结果如下：\n{last_output}"
+        if tool_names == ["ask_knowledge"]:
+            return f"项目/求职参考建议如下：\n{last_output}"
+        if tool_names == ["get_job", "list_evidence", "tailor_resume"]:
+            return f"项目经历定制结果如下：\n{last_output}"
+        return f"已按请求处理：{user_input}\n{last_output}"
 
     def _build_system_prompt(self, memory_context: str) -> str:
         if not memory_context:
@@ -291,7 +404,19 @@ class CareerAgent:
 
     @staticmethod
     def _tool_error_message(tool_result: str) -> str:
-        if tool_result.startswith("未知工具") or tool_result.startswith("工具执行失败"):
+        failure_prefixes = (
+            "未知工具",
+            "工具执行失败",
+            "检索失败",
+            "问答失败",
+            "获取岗位列表失败",
+            "获取岗位信息失败",
+            "分析匹配度失败",
+            "获取履历证据失败",
+            "定制简历失败",
+            "获取个人档案失败",
+        )
+        if tool_result.startswith(failure_prefixes):
             return tool_result
         return ""
 

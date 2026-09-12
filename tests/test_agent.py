@@ -79,7 +79,10 @@ class AgentToolCallTests(unittest.TestCase):
                 _make_llm_response(content="暂无岗位信息。"),
             ]
 
-            result = agent.run("列出所有岗位")
+            result = agent.run(
+                "列出所有岗位",
+                context={"disable_deterministic_policy": True},
+            )
 
         self.assertTrue(result.success)
         self.assertEqual(result.answer, "暂无岗位信息。")
@@ -113,7 +116,10 @@ class AgentToolCallTests(unittest.TestCase):
                 _make_llm_response(content="已读取个人档案。"),
             ]
 
-            result = agent.run("读取个人档案")
+            result = agent.run(
+                "读取个人档案",
+                context={"disable_deterministic_policy": True},
+            )
 
         self.assertTrue(result.success)
         self.assertEqual(result.answer, "已读取个人档案。")
@@ -173,10 +179,65 @@ class AgentToolCallTests(unittest.TestCase):
                 _make_llm_response(content="无岗位"),
             ]
 
-            result = agent.run("列出岗位")
+            result = agent.run(
+                "列出岗位",
+                context={"disable_deterministic_policy": True},
+            )
 
         # tool_output 截断到 500 字符
         self.assertLessEqual(len(result.steps[0].tool_output), 500)
+
+    def test_deterministic_policy_lists_jobs_without_llm(self):
+        rag = MagicMock()
+        store = MagicMock()
+        store.list_job_postings.return_value = []
+        agent = CareerAgent(rag, store)
+
+        with patch.object(agent, "_get_llm", side_effect=AssertionError("should not call llm")):
+            result = agent.run("列出我现在保存的岗位。")
+
+        self.assertTrue(result.success)
+        self.assertEqual([step.tool_name for step in result.steps], ["list_jobs"])
+        self.assertIn("岗位", result.answer)
+
+    def test_deterministic_policy_orders_resume_tailoring_tools(self):
+        rag = MagicMock()
+        rag.tailor_resume.return_value = SimpleNamespace(
+            fit_assessment="匹配。",
+            recommended_text="项目经历：实现 RAG Agent。",
+            evidence_basis="基于已确认证据。",
+            gap_notes="暂无。",
+        )
+        store = MagicMock()
+        store.list_job_postings.return_value = [
+            SimpleNamespace(
+                job_id="job_123",
+                company="测试公司",
+                title="AI Agent 实习生",
+                location="上海",
+                raw_description="需要 RAG 和 FastAPI。",
+                required_skills=["RAG"],
+                preferred_skills=[],
+            )
+        ]
+        store.list_profile_evidence.return_value = [
+            SimpleNamespace(
+                category="project",
+                content="使用 FastAPI 实现 RAG Agent。",
+                verified=True,
+            )
+        ]
+        agent = CareerAgent(rag, store)
+
+        with patch.object(agent, "_get_llm", side_effect=AssertionError("should not call llm")):
+            result = agent.run("基于已确认履历帮我给 job_123 定制一段项目经历。")
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            [step.tool_name for step in result.steps],
+            ["get_job", "list_evidence", "tailor_resume"],
+        )
+        self.assertIn("项目经历", result.answer)
 
 
 class AgentMaxIterationsTests(unittest.TestCase):

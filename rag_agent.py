@@ -32,6 +32,7 @@ load_dotenv()
 
 
 SUPPORTED_SUFFIXES = {".pdf", ".md", ".markdown", ".txt"}
+DEFAULT_REFERENCE_DIRS = (Path("面试问答"),)
 DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_DASHSCOPE_EMBEDDING_URL = (
     "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
@@ -320,6 +321,11 @@ class RagAssistant:
 
     def list_documents(self) -> list[Path]:
         roots = [self.config.docs_dir, self.config.upload_dir]
+        if (
+            self.config.docs_dir == Path("documents")
+            and self.config.upload_dir == Path("data/uploads")
+        ):
+            roots.extend(DEFAULT_REFERENCE_DIRS)
         files: list[Path] = []
         for root in roots:
             if root.exists():
@@ -884,7 +890,7 @@ class RagAssistant:
         if self.config.enable_rerank and scored_docs:
             scored_docs = self._rerank(question, scored_docs, k)
 
-        return scored_docs
+        return self._apply_metadata_boost(question, scored_docs)[:k]
 
     def _rerank(
         self,
@@ -965,6 +971,56 @@ class RagAssistant:
     def _save_bm25_index(self, index: BM25Index) -> None:
         """保存 BM25 索引。"""
         index.save(self.config.bm25_dir)
+
+    def _apply_metadata_boost(
+        self,
+        query: str,
+        candidates: list[tuple[Document, float]],
+    ) -> list[tuple[Document, float]]:
+        terms = self._query_terms(query)
+        if not terms:
+            return candidates
+
+        boosted = []
+        for doc, score in candidates:
+            metadata_text = " ".join(
+                str(doc.metadata.get(key, ""))
+                for key in ("source_name", "heading_path", "section_title")
+            ).casefold()
+            content_text = doc.page_content[:500].casefold()
+            boost = 0.0
+            for term in terms:
+                needle = term.casefold()
+                if needle in metadata_text:
+                    boost += 0.006
+                elif needle in content_text:
+                    boost += 0.002
+            boosted.append((doc, self._safe_score(score) + min(boost, 0.03)))
+        return sorted(boosted, key=lambda item: item[1], reverse=True)
+
+    @staticmethod
+    def _query_terms(query: str) -> list[str]:
+        candidates = [
+            "简历",
+            "项目",
+            "经历",
+            "公司",
+            "研究",
+            "岗位",
+            "面试",
+            "技巧",
+            "RAG",
+            "Agent",
+            "BM25",
+            "RRF",
+            "向量",
+            "检索",
+            "FastAPI",
+            "Python",
+        ]
+        terms = [term for term in candidates if term.casefold() in query.casefold()]
+        terms.extend(re.findall(r"[A-Za-z][A-Za-z0-9_+-]{1,}", query))
+        return list(dict.fromkeys(terms))
 
     def _llm(self) -> ChatOpenAI:
         return ChatOpenAI(
