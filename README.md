@@ -105,7 +105,7 @@ flowchart LR
 ### 1. 后端环境
 
 ```powershell
-conda activate pyth310
+conda activate Agent
 pip install -r requirements.txt
 ```
 
@@ -252,7 +252,7 @@ python -m compileall app.py rag_agent.py career_store.py agent.py tools.py api_c
 稳定回归评测：
 
 ```powershell
-conda activate pyth310
+conda activate Agent
 python evals/multi_eval.py --live-agent --live-retrieval --k 5 --output evals/latest_multi_metrics.json
 ```
 
